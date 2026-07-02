@@ -7,6 +7,18 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Audio
+*.mp3
+*.wav
+*.webm
+*.flac
+
+*t.txt
+
+# Tensors
+*.pt
+*.pth
+
 # C extensions
 *.so
 

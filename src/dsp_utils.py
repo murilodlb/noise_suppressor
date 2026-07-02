@@ -1,5 +1,6 @@
 import numpy as np
 import librosa
+import librosa.display
 from typing import Tuple
 import matplotlib.pyplot as plt
 
@@ -43,6 +44,18 @@ def compute_irm(clean_mag: np.ndarray, noise_mag: np.ndarray, beta: float = 0.5)
     # Os valores da máscara são garantidamente contínuos entre 0 e 1
     return irm
 
+
+def preprocess_noisy_magnitude(noisy_mag: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """
+    Aplica compressão logarítmica e normalização Z-Score na entrada da rede.
+    A máscara alvo (IRM) não deve passar por essa transformação.
+    """
+    log_mag = np.log1p(noisy_mag)
+    mean = float(np.mean(log_mag))
+    std = float(np.std(log_mag))
+    normalized = (log_mag - mean) / (std + eps)
+    return normalized.astype(np.float32)
+
 def plot_time_signals(clean: np.ndarray, noisy: np.ndarray, enhanced: np.ndarray, sr: int, output_path: str = "time_domain.png") -> None:
     """
     Plota e salva os sinais no domínio do tempo (Voz limpa, Ruidosa e Filtrada).
@@ -50,7 +63,7 @@ def plot_time_signals(clean: np.ndarray, noisy: np.ndarray, enhanced: np.ndarray
     # Cria o eixo temporal em segundos baseado na taxa de amostragem
     t = np.linspace(0, len(clean) / sr, len(clean))
     
-    fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True, constrained_layout=True)
     
     axes[0].plot(t, clean, color='green', linewidth=0.7)
     axes[0].set_title('Sinal Limpo (Ground Truth)')
@@ -65,7 +78,6 @@ def plot_time_signals(clean: np.ndarray, noisy: np.ndarray, enhanced: np.ndarray
     axes[2].set_ylabel('Amplitude')
     axes[2].set_xlabel('Tempo (s)')
     
-    plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"[+] Gráfico do domínio do tempo salvo em: {output_path}")
@@ -74,12 +86,13 @@ def plot_spectrograms(clean_mag: np.ndarray, noisy_mag: np.ndarray, enhanced_mag
     """
     Plota e salva os espectrogramas em escala de Decibéis (dB).
     """
-    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True, sharey=True)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True, sharey=True, constrained_layout=True)
     
-    # Converte magnitude para dB (escala logarítmica) para visualização auditiva correta
-    clean_db = librosa.amplitude_to_db(clean_mag, ref=np.max)
-    noisy_db = librosa.amplitude_to_db(noisy_mag, ref=np.max)
-    enhanced_db = librosa.amplitude_to_db(enhanced_mag, ref=np.max)
+    # Usa a mesma referência para os três mapas para manter a comparação visual consistente.
+    ref_value = max(float(np.max(clean_mag)), float(np.max(noisy_mag)), float(np.max(enhanced_mag)))
+    clean_db = librosa.amplitude_to_db(clean_mag, ref=ref_value)
+    noisy_db = librosa.amplitude_to_db(noisy_mag, ref=ref_value)
+    enhanced_db = librosa.amplitude_to_db(enhanced_mag, ref=ref_value)
     
     # Plot 1: Limpo
     img1 = librosa.display.specshow(clean_db, sr=sr, ax=axes[0], y_axis='log', x_axis='time', cmap='magma')
@@ -97,7 +110,6 @@ def plot_spectrograms(clean_mag: np.ndarray, noisy_mag: np.ndarray, enhanced_mag
     # Adiciona barra de cores compartilhada
     fig.colorbar(img3, ax=axes, format='%+2.0f dB')
     
-    plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"[+] Espectrogramas salvos em: {output_path}")
