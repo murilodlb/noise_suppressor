@@ -59,22 +59,29 @@ def _split_indices_by_clean_source(metadata_path: Path, validation_ratio: float,
     return train_indices, validation_indices
 
 
-def train(epochs: int = 20) -> Path:
+def train(
+    epochs: int = 20,
+    batch_size: int = 4,
+    learning_rate: float = 1e-3,
+    validation_ratio: float = 0.2,
+    seed: int = 42,
+    data_root: Path = Path("data"),
+    checkpoint_path: Path = Path("checkpoints/tinyunet.pth"),
+    base_channels: int = 8,
+    num_workers: int = 0,
+) -> Path:
+    torch.manual_seed(seed)
+    random.seed(seed)
+
     sr = 16000
     n_fft = 512
     hop_length = 256
-    batch_size = 4
-    validation_ratio = 0.2
-    learning_rate = 1e-3
 
-    data_root = Path("data")
     clean_dir = data_root / "clean"
     noise_dir = data_root / "noise"
-    checkpoint_dir = Path("checkpoints")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     clean_dir.mkdir(parents=True, exist_ok=True)
     noise_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / "tinyunet.pth"
 
     precomputed_dir = data_root / "precomputed"
     use_precomputed_dataset = precomputed_dir.exists() and any(precomputed_dir.glob("*.pt"))
@@ -114,7 +121,7 @@ def train(epochs: int = 20) -> Path:
         train_indices, validation_indices = _split_indices_by_clean_source(
             metadata_path=metadata_path,
             validation_ratio=validation_ratio,
-            seed=42,
+            seed=seed,
         )
         train_dataset = Subset(dataset, train_indices)
         validation_dataset = Subset(dataset, validation_indices)
@@ -128,14 +135,14 @@ def train(epochs: int = 20) -> Path:
         train_dataset, validation_dataset = random_split(
             dataset,
             [train_size, validation_size],
-            generator=torch.Generator().manual_seed(42),
+            generator=torch.Generator().manual_seed(seed),
         )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = TinyUNet(in_channels=1, base_channels=8).to(device)
+    model = TinyUNet(in_channels=1, base_channels=base_channels).to(device)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -213,6 +220,9 @@ def train(epochs: int = 20) -> Path:
                     "sr": sr,
                     "n_fft": n_fft,
                     "hop_length": hop_length,
+                    "base_channels": base_channels,
+                    "validation_ratio": validation_ratio,
+                    "seed": seed,
                 },
                 checkpoint_path,
             )

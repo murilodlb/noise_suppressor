@@ -1,4 +1,6 @@
 from pathlib import Path
+import random
+from typing import Optional
 
 try:
     from .dataset_builder import PrecomputedNoiseSuppressionDataset
@@ -6,16 +8,28 @@ except ImportError:
     from dataset_builder import PrecomputedNoiseSuppressionDataset
 
 
-def main() -> Path:
-    data_root = Path("data")
-    clean_dir = data_root / "clean"
-    noise_dir = data_root / "noise"
-    output_dir = data_root / "precomputed"
-
+def run_preprocess(
+    clean_dir: str | Path = "data/clean",
+    noise_dir: str | Path = "data/noise",
+    output_dir: str | Path = "data/precomputed",
+    samples_per_clean: int = 1,
+    seed: int = 42,
+) -> Path:
+    random.seed(seed)
     return PrecomputedNoiseSuppressionDataset.export_precomputed_dataset(
         clean_dir=str(clean_dir),
         noise_dir=str(noise_dir),
         output_dir=str(output_dir),
+        samples_per_clean=samples_per_clean,
+    )
+
+
+def main() -> Path:
+    data_root = Path("data")
+    return run_preprocess(
+        clean_dir=data_root / "clean",
+        noise_dir=data_root / "noise",
+        output_dir=data_root / "precomputed",
         samples_per_clean=1,
     )
 

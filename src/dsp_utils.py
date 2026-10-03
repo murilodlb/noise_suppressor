@@ -16,7 +16,7 @@ def compute_stft(audio: np.ndarray, n_fft: int = 512, hop_length: int = 256) -> 
     magnitude, phase = librosa.magphase(stft_complex)
     return magnitude, phase
 
-def compute_istft(magnitude: np.ndarray, phase: np.ndarray, hop_length: int = 256) -> np.ndarray:
+def compute_istft(magnitude: np.ndarray, phase: np.ndarray, hop_length: int = 256, length: int | None = None) -> np.ndarray:
     """
     Calcula a Transformada Inversa (iSTFT).
     Recebe a magnitude filtrada e a fase original para reconstruir o sinal.
@@ -25,7 +25,7 @@ def compute_istft(magnitude: np.ndarray, phase: np.ndarray, hop_length: int = 25
     stft_complex = magnitude * phase
     
     # Reconstrói o sinal no domínio do tempo usando o algoritmo de Overlap-Add
-    audio = librosa.istft(stft_complex, hop_length=hop_length)
+    audio = librosa.istft(stft_complex, hop_length=hop_length, length=length)
     return audio
 
 def compute_irm(clean_mag: np.ndarray, noise_mag: np.ndarray, beta: float = 0.5) -> np.ndarray:

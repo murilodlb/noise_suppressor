@@ -6,6 +6,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+prompt*
 
 # Audio
 *.mp3
@@ -198,3 +199,4 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,venv
+reports/
