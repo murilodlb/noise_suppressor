@@ -6,6 +6,8 @@ from typing import Tuple, Dict, Any, Optional
 
 import librosa
 import numpy as np
+import soundfile as sf
+import soxr
 import torch
 
 from .dsp_utils import compute_stft, compute_istft, preprocess_noisy_magnitude
@@ -26,9 +28,12 @@ def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
     path = Path(file_path)
     suffix = path.suffix.lower()
 
-    if suffix == ".wav":
-        audio, _ = librosa.load(str(path), sr=sr, mono=True)
-        return audio.astype(np.float32)
+    if suffix in (".wav", ".mp3", ".flac", ".ogg"):
+        audio, file_sr = sf.read(str(path), dtype="float32", always_2d=True)
+        mono = audio.mean(axis=1)
+        if file_sr != sr:
+            mono = soxr.resample(mono, file_sr, sr)
+        return mono.astype(np.float32)
 
     ffmpeg_command = [
         "ffmpeg",
@@ -46,8 +51,8 @@ def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
     ]
     result = subprocess.run(ffmpeg_command, check=True, capture_output=True)
     audio_buffer = io.BytesIO(result.stdout)
-    audio, _ = librosa.load(audio_buffer, sr=sr, mono=True)
-    return audio.astype(np.float32)
+    audio, _ = sf.read(audio_buffer, dtype="float32", always_2d=False)
+    return np.asarray(audio, dtype=np.float32)
 
 
 def load_model(

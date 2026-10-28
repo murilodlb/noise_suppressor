@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 import numpy as np
 import torch
 
-from .dsp_utils import compute_stft, compute_istft, compute_irm
+from .dsp_utils import compute_stft, compute_istft, compute_irm, mix_at_snr
 from .inference import load_model, enhance_signal, load_audio_file
 from .metrics import (
     compute_snr,
@@ -21,6 +21,14 @@ from .metrics import (
     compute_attenuation_metrics,
 )
 from .train import _split_indices_by_clean_source
+
+
+FALLBACK_SNR_RANGE = (-5.0, 15.0)
+
+
+def _sample_fallback_snr(seed: int, row_index: int) -> float:
+    """SNR determinística por amostra quando metadata.csv não traz snr_db."""
+    return random.Random(seed + row_index).uniform(*FALLBACK_SNR_RANGE)
 
 
 def _get_snr_bucket(snr_val: float) -> str:
@@ -75,7 +83,7 @@ def evaluate(
     if not metadata_path.exists():
         metadata_path = root_path / "generated" / "metadata.csv"
 
-    eval_pairs: List[Dict[str, str]] = []
+    eval_pairs: List[Dict[str, Any]] = []
 
     if metadata_path.exists():
         _, val_indices = _split_indices_by_clean_source(
@@ -88,9 +96,12 @@ def evaluate(
             reader = csv.DictReader(f)
             for idx, row in enumerate(reader):
                 if idx in val_indices_set:
+                    raw_snr = (row.get("snr_db") or "").strip()
+                    snr_db = float(raw_snr) if raw_snr else _sample_fallback_snr(seed, idx)
                     eval_pairs.append({
                         "clean_file": row["clean_file"],
                         "noise_file": row["noise_file"],
+                        "snr_db": snr_db,
                     })
     else:
         # Fallback if metadata does not exist
@@ -103,10 +114,11 @@ def evaluate(
         rng.shuffle(shuffled_clean)
         val_count = max(1, int(len(shuffled_clean) * validation_ratio))
         val_clean = shuffled_clean[:val_count]
-        for clean_p in val_clean:
+        for file_index, clean_p in enumerate(val_clean):
             eval_pairs.append({
                 "clean_file": str(clean_p),
                 "noise_file": str(rng.choice(noise_files)),
+                "snr_db": _sample_fallback_snr(seed, file_index),
             })
 
     if max_samples is not None and max_samples < len(eval_pairs):
@@ -120,8 +132,7 @@ def evaluate(
     for i, pair in enumerate(eval_pairs, 1):
         clean_audio = _fix_audio_length(load_audio_file(pair["clean_file"], sr=sr), target_samples)
         noise_audio = _fix_audio_length(load_audio_file(pair["noise_file"], sr=sr), target_samples)
-        noisy_audio = clean_audio + noise_audio
-        matched_noise = noisy_audio - clean_audio
+        noisy_audio, matched_noise = mix_at_snr(clean_audio, noise_audio, pair["snr_db"])
 
         clean_mag, _ = compute_stft(clean_audio, n_fft=n_fft, hop_length=hop_length)
         noise_mag, _ = compute_stft(matched_noise, n_fft=n_fft, hop_length=hop_length)
@@ -160,6 +171,7 @@ def evaluate(
             "sample_index": i,
             "clean_file": pair["clean_file"],
             "noise_file": pair["noise_file"],
+            "target_snr_db": pair["snr_db"],
             "input_snr_db": input_snr,
             "snr_bucket": snr_bucket,
             "infer_latency_ms": infer_latency_ms,
@@ -237,6 +249,11 @@ def evaluate(
     for mm in mask_metric_names:
         model_mask_summary[mm] = summarize([r[f"model_mask_{mm}"] for r in records])
 
+    oracle_attenuation_summary = {
+        "speech_attenuation_db": summarize([r["oracle_speech_attenuation_db"] for r in records]),
+        "noise_attenuation_db": summarize([r["oracle_noise_attenuation_db"] for r in records]),
+    }
+
     model_attenuation_summary = {
         "speech_attenuation_db": summarize([r["model_speech_attenuation_db"] for r in records]),
         "noise_attenuation_db": summarize([r["model_noise_attenuation_db"] for r in records]),
@@ -301,6 +318,7 @@ def evaluate(
         "deltas": deltas,
         "mask_metrics": model_mask_summary,
         "attenuation_metrics": model_attenuation_summary,
+        "oracle_attenuation_metrics": oracle_attenuation_summary,
         "snr_buckets": buckets_summary,
     }
 
@@ -341,8 +359,8 @@ def evaluate(
 | **HIT - FA** | {model_mask_summary['hit_minus_fa']['mean']:.3f} | Standard speech separation metric (Kim et al., 2009) |
 | **Mask MSE** | {model_mask_summary['mse']['mean']:.4f} | Mean Squared Error vs. continuous Ideal Ratio Mask |
 | **Mask MAE** | {model_mask_summary['mae']['mean']:.4f} | Mean Absolute Error vs. continuous Ideal Ratio Mask |
-| **Speech Attenuation (SA)** | {model_attenuation_summary['speech_attenuation_db']['mean']:.2f} dB | Speech energy loss (lower is better) |
-| **Noise Attenuation (NA)** | {model_attenuation_summary['noise_attenuation_db']['mean']:.2f} dB | Noise energy removed (higher is better) |
+| **Speech Attenuation (SA)** | {model_attenuation_summary['speech_attenuation_db']['mean']:.2f} dB (oracle: {oracle_attenuation_summary['speech_attenuation_db']['mean']:.2f} dB) | Speech energy loss (lower is better) |
+| **Noise Attenuation (NA)** | {model_attenuation_summary['noise_attenuation_db']['mean']:.2f} dB (oracle: {oracle_attenuation_summary['noise_attenuation_db']['mean']:.2f} dB) | Noise energy removed (higher is better) |
 
 ## 3. Breakdown by Input SNR Bucket
 

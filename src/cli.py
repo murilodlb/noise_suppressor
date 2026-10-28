@@ -23,6 +23,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_prep.add_argument("--output_dir", type=str, default="data/precomputed", help="Output directory for .pt files")
     p_prep.add_argument("--samples_per_clean", type=int, default=1, help="Number of noise mixes per clean file")
     p_prep.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    p_prep.add_argument("--snr_low", type=float, default=-5.0, help="Lower bound of the SNR sampling range (dB)")
+    p_prep.add_argument("--snr_high", type=float, default=15.0, help="Upper bound of the SNR sampling range (dB)")
 
     # 2. Train
     p_train = subparsers.add_parser("train", help="Train the TinyUNet model")
@@ -35,6 +37,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Checkpoint save path")
     p_train.add_argument("--base_channels", type=int, default=8, help="Base channel count for TinyUNet")
     p_train.add_argument("--num_workers", type=int, default=0, help="PyTorch DataLoader worker count")
+    p_train.add_argument("--snr_low", type=float, default=-5.0, help="Lower SNR bound (dB) for online mixing")
+    p_train.add_argument("--snr_high", type=float, default=15.0, help="Upper SNR bound (dB) for online mixing")
+    p_train.add_argument("--device", type=str, default="auto", help="Device (auto, cpu, cuda, cuda:0)")
 
     # 3. Infer
     p_infer = subparsers.add_parser("infer", help="Denoise one or more audio files")
@@ -50,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_demo.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Model checkpoint path")
     p_demo.add_argument("--output_dir", type=str, default="data", help="Output directory for demo audio and plots")
     p_demo.add_argument("--seed", type=int, default=42, help="Random seed")
+    p_demo.add_argument("--snr_db", type=float, default=5.0, help="Target SNR (dB) for mixing clean and noise in the demo")
 
     # 5. Evaluate
     p_eval = subparsers.add_parser("evaluate", help="Evaluate model on validation split against Noisy and Oracle IRM")
@@ -120,6 +126,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             output_dir=args.output_dir,
             samples_per_clean=args.samples_per_clean,
             seed=args.seed,
+            snr_range=(args.snr_low, args.snr_high),
         )
     elif args.command == "train":
         from .train import train
@@ -133,6 +140,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             checkpoint_path=Path(args.checkpoint_path),
             base_channels=args.base_channels,
             num_workers=args.num_workers,
+            snr_range=(args.snr_low, args.snr_high),
+            device=args.device,
         )
     elif args.command == "infer":
         run_infer(
@@ -149,6 +158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             checkpoint_path=args.checkpoint_path,
             output_dir=args.output_dir,
             seed=args.seed,
+            snr_db=args.snr_db,
         )
     elif args.command == "evaluate":
         from .evaluate import evaluate

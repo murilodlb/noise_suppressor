@@ -28,6 +28,35 @@ def compute_istft(magnitude: np.ndarray, phase: np.ndarray, hop_length: int = 25
     audio = librosa.istft(stft_complex, hop_length=hop_length, length=length)
     return audio
 
+def mix_at_snr(clean: np.ndarray, noise: np.ndarray, snr_db: float, eps: float = 1e-8) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Mistura voz limpa e ruído na SNR alvo (dB), escalando apenas o ruído.
+    Retorna (noisy, scaled_noise), garantindo noisy - clean == scaled_noise (sem clipping),
+    relação linear necessária para o cálculo da IRM.
+    """
+    clean = np.asarray(clean, dtype=np.float64)
+    noise = np.asarray(noise, dtype=np.float64)
+
+    # Ajusta o comprimento do ruído ao do sinal limpo
+    if len(noise) > len(clean):
+        noise = noise[: len(clean)]
+    elif len(noise) < len(clean):
+        noise = np.pad(noise, (0, len(clean) - len(noise)), mode="constant")
+
+    clean_power = float(np.mean(clean ** 2)) if len(clean) else 0.0
+    noise_power = float(np.mean(noise ** 2)) if len(noise) else 0.0
+
+    if clean_power <= eps or noise_power <= eps:
+        # SNR indefinida (limpo silencioso ou ruído nulo): mantém o ruído sem escala
+        scale = 1.0
+    else:
+        scale = float(np.sqrt(clean_power / (noise_power * 10.0 ** (snr_db / 10.0))))
+
+    scaled_noise = noise * scale
+    noisy = clean + scaled_noise
+    return noisy.astype(np.float32), scaled_noise.astype(np.float32)
+
+
 def compute_irm(clean_mag: np.ndarray, noise_mag: np.ndarray, beta: float = 0.5) -> np.ndarray:
     """
     Calcula a Máscara de Proporção Ideal (IRM) baseada na energia ao quadrado.
@@ -82,7 +111,7 @@ def plot_time_signals(clean: np.ndarray, noisy: np.ndarray, enhanced: np.ndarray
     plt.close()
     print(f"[+] Gráfico do domínio do tempo salvo em: {output_path}")
 
-def plot_spectrograms(clean_mag: np.ndarray, noisy_mag: np.ndarray, enhanced_mag: np.ndarray, sr: int, output_path: str = "spectrograms.png") -> None:
+def plot_spectrograms(clean_mag: np.ndarray, noisy_mag: np.ndarray, enhanced_mag: np.ndarray, sr: int, output_path: str = "spectrograms.png", hop_length: int = 256) -> None:
     """
     Plota e salva os espectrogramas em escala de Decibéis (dB).
     """
@@ -95,15 +124,15 @@ def plot_spectrograms(clean_mag: np.ndarray, noisy_mag: np.ndarray, enhanced_mag
     enhanced_db = librosa.amplitude_to_db(enhanced_mag, ref=ref_value)
     
     # Plot 1: Limpo
-    img1 = librosa.display.specshow(clean_db, sr=sr, ax=axes[0], y_axis='log', x_axis='time', cmap='magma')
+    img1 = librosa.display.specshow(clean_db, sr=sr, hop_length=hop_length, ax=axes[0], y_axis='log', x_axis='time', cmap='magma')
     axes[0].set_title('Espectrograma Limpo (dB)')
     
     # Plot 2: Ruidoso
-    img2 = librosa.display.specshow(noisy_db, sr=sr, ax=axes[1], y_axis='log', x_axis='time', cmap='magma')
+    img2 = librosa.display.specshow(noisy_db, sr=sr, hop_length=hop_length, ax=axes[1], y_axis='log', x_axis='time', cmap='magma')
     axes[1].set_title('Espectrograma com Ruído (dB)')
     
     # Plot 3: Filtrado
-    img3 = librosa.display.specshow(enhanced_db, sr=sr, ax=axes[2], y_axis='log', x_axis='time', cmap='magma')
+    img3 = librosa.display.specshow(enhanced_db, sr=sr, hop_length=hop_length, ax=axes[2], y_axis='log', x_axis='time', cmap='magma')
     axes[2].set_title('Espectrograma Filtrado (dB)')
     axes[2].set_xlabel('Tempo (s)')
     

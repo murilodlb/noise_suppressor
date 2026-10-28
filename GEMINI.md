@@ -21,6 +21,7 @@ O projeto consiste em um sistema de supressão de áudio não-estacionário que 
 
 * **Orquestração e Validação (`main.py`):** A Prova de Conceito (PoC) testa a inferência injetando ruído em uma amostra isolada (holdout), aplicando a máscara gerada pela U-Net, e exportando tanto os arquivos `.wav` reconstruídos quanto os espectrogramas e ondas para análise visual em disco.
 
+* **Objetivo:** Pretende-se usar esse modelo embarcado, uma possível forma de fazer isso é treinar o modelo com um HPC usando GPU e salvar os pesos para serem utilizados no sistema embarcado como um ESP32, por exemplo. Atualmente o projeto se encontra na fase de pesquisa, com a TinyUNet sendo o primeiro candidato a modelo escolhido. Se o modelo funcionar bem em um computador padrão, o projeto segue para a etapa de TinyML com a pesquisa de viabilidade de desempenho em sistemas modestos embarcados.
 
 ## Regras
 

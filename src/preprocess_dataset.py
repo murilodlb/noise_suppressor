@@ -1,6 +1,6 @@
 from pathlib import Path
 import random
-from typing import Optional
+from typing import Tuple
 
 try:
     from .dataset_builder import PrecomputedNoiseSuppressionDataset
@@ -14,14 +14,18 @@ def run_preprocess(
     output_dir: str | Path = "data/precomputed",
     samples_per_clean: int = 1,
     seed: int = 42,
+    snr_range: Tuple[float, float] = (-5.0, 15.0),
 ) -> Path:
     random.seed(seed)
-    return PrecomputedNoiseSuppressionDataset.export_precomputed_dataset(
+    metadata_path = PrecomputedNoiseSuppressionDataset.export_precomputed_dataset(
         clean_dir=str(clean_dir),
         noise_dir=str(noise_dir),
         output_dir=str(output_dir),
         samples_per_clean=samples_per_clean,
+        snr_range=snr_range,
     )
+    print(f"[+] Dataset pré-computado salvo em: {metadata_path.parent}")
+    return metadata_path
 
 
 def main() -> Path:

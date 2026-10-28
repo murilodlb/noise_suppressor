@@ -9,6 +9,7 @@ import torch
 from .dataset_builder import NoiseSuppressionDataset
 from .dsp_utils import (
     compute_irm,
+    mix_at_snr,
     compute_stft,
     compute_istft,
     plot_time_signals,
@@ -36,6 +37,7 @@ def run_demo(
     checkpoint_path: str | Path = "checkpoints/tinyunet.pth",
     output_dir: str | Path = "data",
     seed: int = 42,
+    snr_db: float = 5.0,
 ) -> Dict[str, Any]:
     print("--- INICIANDO PROVA DE CONCEITO ---")
 
@@ -85,14 +87,17 @@ def run_demo(
 
         clean_signal = fix_length(load_audio_file(selected_clean, sr=sr))
         noise_signal = fix_length(load_audio_file(selected_noise, sr=sr))
-        noisy_signal = clean_signal + noise_signal
+        # noise_signal passa a ser o ruído escalado (usado na IRM de fallback)
+        noisy_signal, noise_signal = mix_at_snr(clean_signal, noise_signal, snr_db)
+        print(f" - SNR alvo da mistura: {snr_db:.1f} dB")
         print(f" - Forma do sinal (amostras): {noisy_signal.shape}")
     else:
         print("[1] Dados de voz/ruído não encontrados; usando sinal sintético como fallback...")
         t = np.linspace(0, target_seconds, target_samples, endpoint=False)
         clean_signal = (0.5 * np.sin(2 * np.pi * 220 * t) + 0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         noise_signal = np.random.normal(0, 0.2, len(t)).astype(np.float32)
-        noisy_signal = clean_signal + noise_signal
+        noisy_signal, noise_signal = mix_at_snr(clean_signal, noise_signal, snr_db)
+        print(f" - SNR alvo da mistura: {snr_db:.1f} dB")
         print(f" - Forma do sinal (amostras): {noisy_signal.shape}")
 
     # 2. STFT
@@ -142,7 +147,7 @@ def run_demo(
     imgs_dir = out_root / "imgs"
     imgs_dir.mkdir(parents=True, exist_ok=True)
     plot_time_signals(clean_signal, noisy_signal, enhanced_signal, sr=sr, output_path=str(imgs_dir / "time_domain.png"))
-    plot_spectrograms(clean_mag, noisy_mag, enhanced_mag, sr=sr, output_path=str(imgs_dir / "spectrograms.png"))
+    plot_spectrograms(clean_mag, noisy_mag, enhanced_mag, sr=sr, output_path=str(imgs_dir / "spectrograms.png"), hop_length=hop_length)
 
     audio_dir = out_root / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)

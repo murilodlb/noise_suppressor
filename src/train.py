@@ -59,6 +59,19 @@ def _split_indices_by_clean_source(metadata_path: Path, validation_ratio: float,
     return train_indices, validation_indices
 
 
+def _resolve_device(device: str) -> torch.device:
+    requested = device.strip().lower()
+    if requested == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if requested.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"Dispositivo '{device}' solicitado, mas torch.cuda.is_available() é False "
+            f"(torch={torch.__version__}). No cluster/GPU, instale a wheel CUDA do PyTorch "
+            f"(ex.: uv pip install --reinstall torch --index-url https://download.pytorch.org/whl/cu124)."
+        )
+    return torch.device(device)
+
+
 def train(
     epochs: int = 20,
     batch_size: int = 4,
@@ -69,9 +82,13 @@ def train(
     checkpoint_path: Path = Path("checkpoints/tinyunet.pth"),
     base_channels: int = 8,
     num_workers: int = 0,
+    snr_range: tuple[float, float] = (-5.0, 15.0),
+    device: str = "auto",
 ) -> Path:
     torch.manual_seed(seed)
     random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
     sr = 16000
     n_fft = 512
@@ -97,7 +114,7 @@ def train(
             sr=sr,
             n_fft=n_fft,
             hop_length=hop_length,
-            snr_range=(0.0, 10.0),
+            snr_range=snr_range,
         )
 
         if not dataset.clean_files:
@@ -138,11 +155,35 @@ def train(
             generator=torch.Generator().manual_seed(seed),
         )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    resolved_device = _resolve_device(device)
+    use_cuda = resolved_device.type == "cuda"
+    if use_cuda:
+        torch.backends.cudnn.benchmark = True
+        gpu_index = resolved_device.index if resolved_device.index is not None else torch.cuda.current_device()
+        gpu_name = torch.cuda.get_device_name(gpu_index)
+        vram_gb = torch.cuda.get_device_properties(gpu_index).total_memory / (1024 ** 3)
+        print(f"[i] Treinando em GPU CUDA: {gpu_name} ({vram_gb:.1f} GB VRAM) | device={resolved_device}")
+    else:
+        print(f"[i] Treinando em CPU | device={resolved_device}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = TinyUNet(in_channels=1, base_channels=base_channels).to(device)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0),
+    )
+    validation_loader = DataLoader(
+        validation_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0),
+    )
+
+    model = TinyUNet(in_channels=1, base_channels=base_channels).to(resolved_device)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -161,8 +202,8 @@ def train(
         train_batches = len(train_loader)
 
         for batch_index, (noisy_mag, irm) in enumerate(train_loader, start=1):
-            noisy_mag = noisy_mag.to(device)
-            irm = irm.to(device)
+            noisy_mag = noisy_mag.to(resolved_device, non_blocking=use_cuda)
+            irm = irm.to(resolved_device, non_blocking=use_cuda)
 
             optimizer.zero_grad(set_to_none=True)
             predicted_mask = model(noisy_mag)
@@ -185,8 +226,8 @@ def train(
         validation_batches = len(validation_loader)
         with torch.no_grad():
             for batch_index, (noisy_mag, irm) in enumerate(validation_loader, start=1):
-                noisy_mag = noisy_mag.to(device)
-                irm = irm.to(device)
+                noisy_mag = noisy_mag.to(resolved_device, non_blocking=use_cuda)
+                irm = irm.to(resolved_device, non_blocking=use_cuda)
                 predicted_mask = model(noisy_mag)
                 loss = criterion(predicted_mask, irm)
                 validation_loss_sum += loss.item() * noisy_mag.size(0)
@@ -234,5 +275,6 @@ def train(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Treina a TinyUNet para supressao de ruido.")
     parser.add_argument("--epochs", type=int, default=20, help="Numero de epocas de treino.")
+    parser.add_argument("--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0).")
     args = parser.parse_args()
-    train(epochs=args.epochs)
+    train(epochs=args.epochs, device=args.device)

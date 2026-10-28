@@ -75,15 +75,15 @@ uv run pytest
 O projeto expõe o comando `noise_suppressor` gerenciado pelo `uv`:
 
 ### 1. Pré-processamento do Dataset (I/O Optimization)
-Pré-calcula as magnitudes STFT e as máscaras IRM para disco em tensores `.pt`, acelerando drasticamente o treino:
+Pré-calcula as magnitudes STFT e as máscaras IRM para disco em tensores `.pt` com mixagem controlada por SNR (padrão: `[-5.0, 15.0]` dB), acelerando drasticamente o treino:
 ```bash
-uv run noise_suppressor preprocess --samples_per_clean 1
+uv run noise_suppressor preprocess --samples_per_clean 1 --snr_low -5.0 --snr_high 15.0
 ```
 
 ### 2. Treinamento da TinyU-Net
 Treina o modelo prevenindo vazamento de dados (*leakage* por locutor) via divisão dos arquivos de voz de origem:
 ```bash
-uv run noise_suppressor train --epochs 20 --batch_size 4 --learning_rate 1e-3
+uv run noise_suppressor train --epochs 20 --batch_size 4 --learning_rate 1e-3 --snr_low -5.0 --snr_high 15.0
 ```
 
 ### 3. Inferência em Áudios Arbitrários
@@ -93,9 +93,9 @@ uv run noise_suppressor infer --input data/audio/noisy.wav --output_dir reports/
 ```
 
 ### 4. Demonstração Interativa (PoC)
-Executa a demonstração ponta a ponta com áudio de teste e gera os gráficos comparativos em `data/imgs/`:
+Executa a demonstração ponta a ponta com áudio de teste na SNR desejada (padrão: `5.0` dB) e gera os gráficos comparativos em `data/imgs/`:
 ```bash
-uv run noise_suppressor demo
+uv run noise_suppressor demo --snr_db 5.0
 ```
 
 ### 5. Avaliação de Qualidade de Sinal (Signal Quality Evaluation)
