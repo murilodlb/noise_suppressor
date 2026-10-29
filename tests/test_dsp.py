@@ -5,8 +5,11 @@ import numpy as np
 import pytest
 import torch
 
-from src.dataset_builder import NoiseSuppressionDataset, PrecomputedNoiseSuppressionDataset
-from src.dsp_utils import mix_at_snr, plot_spectrograms
+from src.dataset_builder import (
+    NoiseSuppressionDataset,
+    PrecomputedNoiseSuppressionDataset,
+)
+from src.dsp_utils import crop_or_pad_audio, mix_at_snr, plot_spectrograms
 from src.metrics import compute_snr
 
 SR = 16000
@@ -99,3 +102,23 @@ def test_precomputed_dataset_follows_metadata_order(tmp_path):
     assert len(dataset) == 2  # arquivo órfão ignorado
     assert float(dataset[0][0][0, 0, 0]) == 1.0  # linha 0 do CSV -> b.pt
     assert float(dataset[1][0][0, 0, 0]) == 2.0
+
+
+def test_crop_or_pad_audio_selects_active_speech_window():
+    # 5.0s de áudio (80000 amostras): 2.0s de silêncio inicial, 2.0s de fala ativa e 1.0s de silêncio final
+    audio = np.zeros(80000, dtype=np.float32)
+    speech_segment = _make_clean(32000)
+    audio[32000:64000] = speech_segment
+
+    cropped = crop_or_pad_audio(audio, 32000)
+    assert len(cropped) == 32000
+    assert np.allclose(cropped, speech_segment)
+
+
+def test_crop_or_pad_audio_pads_short_signal():
+    short_signal = _make_clean(16000)
+    padded = crop_or_pad_audio(short_signal, 32000)
+    assert len(padded) == 32000
+    assert np.allclose(padded[:16000], short_signal)
+    assert np.all(padded[16000:] == 0.0)
+

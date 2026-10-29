@@ -1,27 +1,32 @@
-from collections import defaultdict
 import csv
-from datetime import datetime
 import json
-from pathlib import Path
 import random
 import time
-from typing import Dict, Any, List, Optional
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
 
-from .dsp_utils import compute_stft, compute_istft, compute_irm, mix_at_snr
-from .inference import load_model, enhance_signal, load_audio_file
+from .dsp_utils import (
+    compute_irm,
+    compute_istft,
+    compute_stft,
+    crop_or_pad_audio,
+    mix_at_snr,
+)
+from .inference import enhance_signal, load_audio_file, load_model
 from .metrics import (
-    compute_snr,
-    compute_signal_metrics,
-    compute_mask_threshold,
+    compute_attenuation_metrics,
     compute_mask_classification_metrics,
     compute_mask_regression_metrics,
-    compute_attenuation_metrics,
+    compute_mask_threshold,
+    compute_signal_metrics,
+    compute_snr,
 )
 from .train import _split_indices_by_clean_source
-
 
 FALLBACK_SNR_RANGE = (-5.0, 15.0)
 
@@ -43,11 +48,7 @@ def _get_snr_bucket(snr_val: float) -> str:
 
 
 def _fix_audio_length(audio: np.ndarray, target_samples: int) -> np.ndarray:
-    if len(audio) > target_samples:
-        return audio[:target_samples]
-    elif len(audio) < target_samples:
-        return np.pad(audio, (0, target_samples - len(audio)), mode="constant")
-    return audio
+    return crop_or_pad_audio(audio, target_samples)
 
 
 def evaluate(
@@ -60,6 +61,7 @@ def evaluate(
     lc_db: float = 0.0,
     device: str = "cpu",
     target_seconds: float = 2.0,
+    model_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Evaluates the noise suppression model on the held-out validation split.
@@ -69,8 +71,10 @@ def evaluate(
     """
     root_path = Path(data_root)
     torch_device = torch.device(device)
-    model, dsp_config = load_model(checkpoint_path, device=torch_device)
+    model, dsp_config = load_model(checkpoint_path, device=torch_device, model_name=model_name)
     model.eval()
+
+    resolved_model_name = dsp_config.get("model_name", model_name or "tinyunet")
 
     sr = dsp_config.get("sr", 16000)
     n_fft = dsp_config.get("n_fft", 512)
@@ -308,6 +312,7 @@ def evaluate(
 
     full_results = {
         "timestamp": timestamp,
+        "model_name": resolved_model_name,
         "checkpoint": str(checkpoint_path),
         "total_samples": len(records),
         "threshold_config": {
@@ -332,13 +337,14 @@ def evaluate(
     md_content = f"""# Signal Quality & Mask Evaluation Report
 
 - **Date:** {timestamp}
+- **Model Architecture:** `{resolved_model_name}`
 - **Checkpoint:** `{checkpoint_path}`
 - **Validation Samples:** {len(records)}
 - **T-F Mask Decision Threshold (LC = {lc_db} dB):** {threshold:.4f}
 
 ## 1. System Performance Comparison
 
-| Metric | Noisy (Baseline) | TinyU-Net (Model) | Oracle IRM (Upper Bound) | Δ Model vs Noisy |
+| Metric | Noisy (Baseline) | {resolved_model_name} (Model) | Oracle IRM (Upper Bound) | Δ Model vs Noisy |
 |---|---|---|---|---|
 | **SI-SDR (dB)** | {systems_summary['noisy']['si_sdr']['mean']:.2f} ± {systems_summary['noisy']['si_sdr']['std']:.2f} | {systems_summary['model']['si_sdr']['mean']:.2f} ± {systems_summary['model']['si_sdr']['std']:.2f} | {systems_summary['oracle']['si_sdr']['mean']:.2f} ± {systems_summary['oracle']['si_sdr']['std']:.2f} | **{deltas['delta_model_vs_noisy_si_sdr']['mean']:+.2f} dB** |
 | **SNR (dB)** | {systems_summary['noisy']['snr']['mean']:.2f} ± {systems_summary['noisy']['snr']['std']:.2f} | {systems_summary['model']['snr']['mean']:.2f} ± {systems_summary['model']['snr']['std']:.2f} | {systems_summary['oracle']['snr']['mean']:.2f} ± {systems_summary['oracle']['snr']['std']:.2f} | **{deltas['delta_model_vs_noisy_snr']['mean']:+.2f} dB** |
@@ -349,7 +355,7 @@ def evaluate(
 
 ## 2. Time-Frequency Mask Evaluation (Classification & Regression)
 
-| Metric | TinyU-Net Value | Description |
+| Metric | {resolved_model_name} Value | Description |
 |---|---|---|
 | **Precision** | {model_mask_summary['precision']['mean']:.3f} | Speech T-F bins predicted correctly / all predicted speech bins |
 | **Recall (Hit Rate)** | {model_mask_summary['recall']['mean']:.3f} | Speech T-F bins preserved / total ground-truth speech bins |

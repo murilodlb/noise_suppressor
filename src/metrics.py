@@ -1,4 +1,6 @@
-from typing import Dict, Any, Tuple
+import warnings
+from typing import Any, Dict, Tuple
+
 import numpy as np
 
 try:
@@ -127,7 +129,7 @@ def compute_pesq(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000) -
 
 
 def compute_stoi(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000, extended: bool = False) -> float:
-    """Computes STOI or extended STOI (ESTOI). Returns float('nan') on error or missing dependency."""
+    """Computes STOI or extended STOI (ESTOI). Returns float('nan') on error, insufficient active frames, or missing dependency."""
     if pystoi is None:
         return float("nan")
 
@@ -139,8 +141,15 @@ def compute_stoi(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000, e
         return float("nan")
 
     try:
-        score = pystoi.stoi(ref, est, sr, extended=extended)
-        return float(score)
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always", RuntimeWarning)
+            score = float(pystoi.stoi(ref, est, sr, extended=extended))
+            for w in caught_warnings:
+                if issubclass(w.category, RuntimeWarning) and "Not enough STFT frames" in str(w.message):
+                    return float("nan")
+        if abs(score - 1e-5) < 1e-9:
+            return float("nan")
+        return score
     except Exception:
         return float("nan")
 

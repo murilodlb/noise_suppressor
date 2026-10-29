@@ -1,16 +1,17 @@
 import math
+
 import numpy as np
 import pytest
 
 from src.metrics import (
-    compute_snr,
-    compute_si_sdr,
-    compute_segmental_snr,
-    compute_mask_threshold,
+    compute_attenuation_metrics,
     compute_mask_classification_metrics,
     compute_mask_regression_metrics,
-    compute_attenuation_metrics,
+    compute_mask_threshold,
     compute_pesq,
+    compute_segmental_snr,
+    compute_si_sdr,
+    compute_snr,
     compute_stoi,
 )
 
@@ -96,3 +97,14 @@ def test_pesq_and_stoi_on_speech():
     speech_like = (0.5 * np.sin(2 * np.pi * 200 * t) + 0.3 * np.sin(2 * np.pi * 400 * t)).astype(np.float32)
     stoi_val = compute_stoi(speech_like, speech_like, sr=sr)
     assert stoi_val > 0.95
+
+
+def test_compute_stoi_returns_nan_on_short_active_speech():
+    sr = 16000
+    # 2.0s de áudio total com apenas 100ms (1600 amostras) de atividade (< 384ms exigidos pelo pystoi)
+    short_burst = np.zeros(32000, dtype=np.float32)
+    t = np.linspace(0, 0.1, 1600)
+    short_burst[:1600] = (0.5 * np.sin(2 * np.pi * 250 * t)).astype(np.float32)
+    stoi_val = compute_stoi(short_burst, short_burst, sr=sr)
+    assert math.isnan(stoi_val)
+

@@ -1,17 +1,16 @@
 import json
 import os
 import platform
-from pathlib import Path
 import time
-from typing import Dict, Any, Tuple, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from .dsp_utils import compute_stft, compute_istft, preprocess_noisy_magnitude
+from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
 from .inference import load_model
-from .model import TinyUNet
 
 
 def count_parameters(model: nn.Module) -> Dict[str, int]:
@@ -81,6 +80,30 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
             macs_by_layer[name] = int(output.numel())
         return hook
 
+    def linear_hook(name: str):
+        def hook(layer: nn.Linear, inputs, outputs):
+            output = outputs
+            num_instances = int(output.numel() // layer.out_features)
+            macs_by_layer[name] = num_instances * layer.in_features * layer.out_features
+        return hook
+
+    def rnn_hook(name: str, num_gates: int):
+        def hook(layer: nn.RNNBase, inputs, outputs):
+            inp = inputs[0]
+            if layer.batch_first:
+                batch_size, seq_len, _ = inp.shape
+            else:
+                seq_len, batch_size, _ = inp.shape
+            num_directions = 2 if layer.bidirectional else 1
+            hidden_size = layer.hidden_size
+            total_layer_macs = 0
+            for layer_idx in range(layer.num_layers):
+                in_sz = layer.input_size if layer_idx == 0 else hidden_size * num_directions
+                step_macs = num_gates * (in_sz * hidden_size + hidden_size * hidden_size)
+                total_layer_macs += batch_size * seq_len * num_directions * step_macs
+            macs_by_layer[name] = int(total_layer_macs)
+        return hook
+
     for name, module in model.named_modules():
         if isinstance(module, nn.Conv2d):
             handles.append(module.register_forward_hook(conv2d_hook(name)))
@@ -88,6 +111,12 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
             handles.append(module.register_forward_hook(conv_transpose2d_hook(name)))
         elif isinstance(module, nn.BatchNorm2d):
             handles.append(module.register_forward_hook(bn2d_hook(name)))
+        elif isinstance(module, nn.Linear):
+            handles.append(module.register_forward_hook(linear_hook(name)))
+        elif isinstance(module, nn.GRU):
+            handles.append(module.register_forward_hook(rnn_hook(name, num_gates=3)))
+        elif isinstance(module, nn.LSTM):
+            handles.append(module.register_forward_hook(rnn_hook(name, num_gates=4)))
 
     device = next(model.parameters()).device
     dummy_input = torch.zeros(input_shape, device=device)
@@ -145,7 +174,7 @@ def estimate_activation_memory(model: nn.Module, input_shape: Tuple[int, ...]) -
 
 
 def time_pipeline_stages(
-    model: TinyUNet,
+    model: nn.Module,
     signal: np.ndarray,
     n_fft: int = 512,
     hop_length: int = 256,
@@ -238,15 +267,24 @@ def run_benchmark(
     num_threads: Optional[int] = None,
     device: str = "cpu",
     output_path: Optional[str | Path] = None,
+    model_name: Optional[str] = None,
+    base_channels: int = 8,
 ) -> Dict[str, Any]:
     """Runs a full computational overhead benchmark and exports results."""
     if num_threads is not None and num_threads > 0:
         torch.set_num_threads(num_threads)
 
     torch_device = torch.device(device)
-    model, dsp_config = load_model(checkpoint_path, device=torch_device)
+    model, dsp_config = load_model(
+        checkpoint_path,
+        device=torch_device,
+        model_name=model_name,
+        base_channels=base_channels,
+    )
     model.eval()
 
+    resolved_model_name = dsp_config.get("model_name", model_name or "tinyunet")
+    resolved_base_channels = dsp_config.get("base_channels", base_channels)
     sr = dsp_config.get("sr", sr)
     n_fft = dsp_config.get("n_fft", n_fft)
     hop_length = dsp_config.get("hop_length", hop_length)
@@ -311,6 +349,8 @@ def run_benchmark(
     }
 
     results = {
+        "model_name": resolved_model_name,
+        "base_channels": resolved_base_channels,
         "system_info": system_info,
         "audio_config": {
             "sr": sr,

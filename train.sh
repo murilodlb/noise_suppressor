@@ -15,6 +15,7 @@ set -euo pipefail
 #   EPOCHS=50 BATCH_SIZE=16 LR=1e-3 CUDA_WHEEL=cu124 sbatch train.sh
 # ==============================================================================
 
+MODEL="${MODEL:-tinyunet}"
 EPOCHS="${EPOCHS:-30}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 LR="${LR:-1e-3}"
@@ -24,7 +25,7 @@ SNR_LOW="${SNR_LOW:--5.0}"
 SNR_HIGH="${SNR_HIGH:-15.0}"
 SEED="${SEED:-42}"
 NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-4}}"
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/tinyunet.pth}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/${MODEL}.pth}"
 CUDA_WHEEL="${CUDA_WHEEL:-cu124}"
 
 mkdir -p reports checkpoints
@@ -34,6 +35,7 @@ echo " Job ID          : ${SLURM_JOB_ID:-local}"
 echo " Node            : $(hostname)"
 echo " Date            : $(date --iso-8601=seconds)"
 echo " Working Dir     : $(pwd)"
+echo " Model           : ${MODEL}"
 echo " Epochs          : ${EPOCHS}"
 echo " Batch Size      : ${BATCH_SIZE}"
 echo " Learning Rate   : ${LR}"
@@ -94,8 +96,9 @@ fi
 
 # 5. Run GPU training
 # Note: --no-sync prevents uv from reverting the CUDA torch wheel back to the CPU lockfile entry
-echo "[4/5] Iniciando treinamento da TinyU-Net em GPU (CUDA)..."
+echo "[4/5] Iniciando treinamento do modelo '${MODEL}' em GPU (CUDA)..."
 uv run --no-sync noise_suppressor train \
+    --model "${MODEL}" \
     --device cuda \
     --epochs "${EPOCHS}" \
     --batch_size "${BATCH_SIZE}" \
@@ -111,6 +114,7 @@ uv run --no-sync noise_suppressor train \
 # 6. Evaluate trained weights on validation split
 echo "[5/5] Avaliando pesos treinados no split de validação..."
 uv run --no-sync noise_suppressor evaluate \
+    --model "${MODEL}" \
     --device cuda \
     --checkpoint_path "${CHECKPOINT_PATH}" \
     --max_samples 100 \

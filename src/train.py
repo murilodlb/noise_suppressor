@@ -1,19 +1,26 @@
-from pathlib import Path
+import argparse
 import csv
 import random
-import argparse
 from collections import defaultdict
+from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split, Subset
+from torch.utils.data import DataLoader, Subset, random_split
 
 try:
-    from .dataset_builder import NoiseSuppressionDataset, PrecomputedNoiseSuppressionDataset
-    from .model import TinyUNet
+    from .dataset_builder import (
+        NoiseSuppressionDataset,
+        PrecomputedNoiseSuppressionDataset,
+    )
+    from .model import build_model, list_available_models
 except ImportError:
-    from dataset_builder import NoiseSuppressionDataset, PrecomputedNoiseSuppressionDataset
-    from model import TinyUNet
+    from dataset_builder import (
+        NoiseSuppressionDataset,
+        PrecomputedNoiseSuppressionDataset,
+    )
+    from model import build_model, list_available_models
 
 
 def _print_progress_bar(current: int, total: int, prefix: str, suffix: str = "") -> None:
@@ -79,16 +86,21 @@ def train(
     validation_ratio: float = 0.2,
     seed: int = 42,
     data_root: Path = Path("data"),
-    checkpoint_path: Path = Path("checkpoints/tinyunet.pth"),
+    checkpoint_path: Optional[Path] = None,
     base_channels: int = 8,
     num_workers: int = 0,
     snr_range: tuple[float, float] = (-5.0, 15.0),
     device: str = "auto",
+    model_name: str = "tinyunet",
 ) -> Path:
     torch.manual_seed(seed)
     random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+    normalized_model_name = model_name.lower().strip()
+    if checkpoint_path is None:
+        checkpoint_path = Path(f"checkpoints/{normalized_model_name}.pth")
 
     sr = 16000
     n_fft = 512
@@ -183,7 +195,11 @@ def train(
         persistent_workers=(num_workers > 0),
     )
 
-    model = TinyUNet(in_channels=1, base_channels=base_channels).to(resolved_device)
+    model = build_model(
+        model_name=normalized_model_name,
+        in_channels=1,
+        base_channels=base_channels,
+    ).to(resolved_device)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -253,6 +269,7 @@ def train(
             best_validation_loss = mean_validation_loss
             torch.save(
                 {
+                    "model_name": normalized_model_name,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
@@ -273,8 +290,9 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Treina a TinyUNet para supressao de ruido.")
+    parser = argparse.ArgumentParser(description="Treina um modelo registrado para supressão de ruído.")
+    parser.add_argument("--model", type=str, default="tinyunet", choices=list_available_models(), help="Arquitetura a treinar.")
     parser.add_argument("--epochs", type=int, default=20, help="Numero de epocas de treino.")
     parser.add_argument("--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0).")
     args = parser.parse_args()
-    train(epochs=args.epochs, device=args.device)
+    train(epochs=args.epochs, device=args.device, model_name=args.model)

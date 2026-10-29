@@ -1,6 +1,12 @@
 import torch
 import torch.nn as nn
-from src.benchmark import count_parameters, compute_model_size_bytes, count_macs, estimate_activation_memory
+
+from src.benchmark import (
+    compute_model_size_bytes,
+    count_macs,
+    count_parameters,
+    estimate_activation_memory,
+)
 from src.model import TinyUNet
 
 

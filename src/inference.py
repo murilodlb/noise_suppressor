@@ -1,17 +1,18 @@
-from dataclasses import dataclass
 import io
-from pathlib import Path
 import subprocess
-from typing import Tuple, Dict, Any, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 import librosa
 import numpy as np
 import soundfile as sf
 import soxr
 import torch
+import torch.nn as nn
 
-from .dsp_utils import compute_stft, compute_istft, preprocess_noisy_magnitude
-from .model import TinyUNet
+from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
+from .model import build_model
 
 
 @dataclass
@@ -58,16 +59,19 @@ def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
 def load_model(
     checkpoint_path: Optional[str | Path] = None,
     device: Optional[torch.device] = None,
+    model_name: Optional[str] = None,
     base_channels: int = 8,
-) -> Tuple[TinyUNet, Dict[str, Any]]:
+) -> Tuple[nn.Module, Dict[str, Any]]:
     """
-    Loads TinyUNet from a checkpoint, returning the model and its DSP metadata.
+    Loads a registered model from a checkpoint, returning the model and its DSP/architecture metadata.
     If checkpoint_path is None or doesn't exist, returns an uninitialized model.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    resolved_model_name = (model_name or "tinyunet").lower().strip()
     dsp_config: Dict[str, Any] = {
+        "model_name": resolved_model_name,
         "sr": 16000,
         "n_fft": 512,
         "hop_length": 256,
@@ -79,26 +83,40 @@ def load_model(
         if path.exists():
             checkpoint = torch.load(path, map_location=device)
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                base_ch = checkpoint.get("base_channels", base_channels)
+                resolved_model_name = str(checkpoint.get("model_name", model_name or "tinyunet")).lower().strip()
+                base_ch = int(checkpoint.get("base_channels", base_channels))
+                dsp_config["model_name"] = resolved_model_name
                 dsp_config["base_channels"] = base_ch
                 dsp_config["sr"] = checkpoint.get("sr", 16000)
                 dsp_config["n_fft"] = checkpoint.get("n_fft", 512)
                 dsp_config["hop_length"] = checkpoint.get("hop_length", 256)
-                model = TinyUNet(in_channels=1, base_channels=base_ch).to(device)
+                model = build_model(
+                    model_name=resolved_model_name,
+                    in_channels=1,
+                    base_channels=base_ch,
+                ).to(device)
                 model.load_state_dict(checkpoint["model_state_dict"])
             else:
-                model = TinyUNet(in_channels=1, base_channels=base_channels).to(device)
+                model = build_model(
+                    model_name=resolved_model_name,
+                    in_channels=1,
+                    base_channels=base_channels,
+                ).to(device)
                 model.load_state_dict(checkpoint)
             model.eval()
             return model, dsp_config
 
-    model = TinyUNet(in_channels=1, base_channels=base_channels).to(device)
+    model = build_model(
+        model_name=resolved_model_name,
+        in_channels=1,
+        base_channels=base_channels,
+    ).to(device)
     model.eval()
     return model, dsp_config
 
 
 def predict_mask(
-    model: TinyUNet,
+    model: nn.Module,
     noisy_mag: np.ndarray,
     device: Optional[torch.device] = None,
 ) -> np.ndarray:
@@ -118,7 +136,7 @@ def predict_mask(
 
 
 def enhance_signal(
-    model: TinyUNet,
+    model: nn.Module,
     noisy_signal: np.ndarray,
     n_fft: int = 512,
     hop_length: int = 256,

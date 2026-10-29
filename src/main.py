@@ -1,6 +1,6 @@
-from pathlib import Path
 import random
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import numpy as np
 import soundfile as sf
@@ -9,14 +9,15 @@ import torch
 from .dataset_builder import NoiseSuppressionDataset
 from .dsp_utils import (
     compute_irm,
-    mix_at_snr,
-    compute_stft,
     compute_istft,
-    plot_time_signals,
+    compute_stft,
+    crop_or_pad_audio,
+    mix_at_snr,
     plot_spectrograms,
+    plot_time_signals,
     preprocess_noisy_magnitude,
 )
-from .inference import load_model, enhance_signal, load_audio_file
+from .inference import enhance_signal, load_audio_file, load_model
 from .metrics import compute_signal_metrics
 
 
@@ -38,6 +39,7 @@ def run_demo(
     output_dir: str | Path = "data",
     seed: int = 42,
     snr_db: float = 5.0,
+    model_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     print("--- INICIANDO PROVA DE CONCEITO ---")
 
@@ -57,11 +59,7 @@ def run_demo(
 
     # 1. Carregar áudios
     def fix_length(sig: np.ndarray) -> np.ndarray:
-        if len(sig) > target_samples:
-            return sig[:target_samples]
-        elif len(sig) < target_samples:
-            return np.pad(sig, (0, target_samples - len(sig)), mode="constant")
-        return sig
+        return crop_or_pad_audio(sig, target_samples)
 
     if clean_path is not None and Path(clean_path).exists():
         selected_clean = Path(clean_path)
@@ -113,12 +111,12 @@ def run_demo(
 
     if ckpt_path.exists():
         print(f"[3] Carregando checkpoint treinado: {ckpt_path}")
-        model, _ = load_model(ckpt_path, device=device)
+        model, dsp_cfg = load_model(ckpt_path, device=device, model_name=model_name)
         enhancement = enhance_signal(model, noisy_signal, n_fft=n_fft, hop_length=hop_length, device=device)
         enhanced_signal = enhancement.enhanced_signal
         mask_np = enhancement.predicted_mask
         filtered_mag = enhancement.filtered_mag
-        mask_source = "modelo treinado"
+        mask_source = f"modelo treinado ({dsp_cfg.get('model_name', 'tinyunet')})"
     else:
         print("[3] Nenhum checkpoint encontrado; aplicando máscara IRM ideal como fallback...")
         mask_np = compute_irm(clean_mag, noise_mag, beta=0.5)

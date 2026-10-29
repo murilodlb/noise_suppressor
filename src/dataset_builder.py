@@ -1,22 +1,35 @@
-import os
-import glob
-import random
 import csv
+import glob
 import io
+import os
+import random
 import subprocess
 from pathlib import Path
-import numpy as np
+from typing import Dict, List, Optional, Tuple
+
 import librosa
-import torch
-from torch.utils.data import Dataset
-from typing import Tuple, List, Optional, Dict
+import numpy as np
 import soundfile as sf
 import soxr
+import torch
+from torch.utils.data import Dataset
 
 try:
-    from .dsp_utils import compute_stft, compute_irm, preprocess_noisy_magnitude, mix_at_snr
+    from .dsp_utils import (
+        compute_irm,
+        compute_stft,
+        crop_or_pad_audio,
+        mix_at_snr,
+        preprocess_noisy_magnitude,
+    )
 except ImportError:
-    from dsp_utils import compute_stft, compute_irm, preprocess_noisy_magnitude, mix_at_snr
+    from dsp_utils import (
+        compute_irm,
+        compute_stft,
+        crop_or_pad_audio,
+        mix_at_snr,
+        preprocess_noisy_magnitude,
+    )
 
 
 def _print_export_progress(current: int, total: int, prefix: str = "Preprocess") -> None:
@@ -86,13 +99,7 @@ class NoiseSuppressionDataset(Dataset):
         return self._noise_cache[noise_file]
 
     def _fix_length(self, audio: np.ndarray) -> np.ndarray:
-        if len(audio) > self.target_num_samples:
-            return audio[: self.target_num_samples]
-
-        if len(audio) < self.target_num_samples:
-            return np.pad(audio, (0, self.target_num_samples - len(audio)), mode="constant")
-
-        return audio
+        return crop_or_pad_audio(audio, self.target_num_samples)
 
     def __len__(self) -> int:
         return len(self.clean_files)

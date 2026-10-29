@@ -1,6 +1,9 @@
+from typing import Any, Dict, List, Type
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 def center_crop(encoder_layer: torch.Tensor, decoder_layer: torch.Tensor) -> torch.Tensor:
     """
@@ -38,7 +41,9 @@ class TinyUNet(nn.Module):
     """
     def __init__(self, in_channels: int = 1, base_channels: int = 8):
         super().__init__()
-        
+        self.in_channels = in_channels
+        self.base_channels = base_channels
+
         # Encoder (Downsampling)
         self.enc1 = DoubleConv(in_channels, base_channels)
         self.enc2 = DoubleConv(base_channels, base_channels * 2)
@@ -90,3 +95,31 @@ class TinyUNet(nn.Module):
             out = F.interpolate(out, size=x.shape[2:], mode='bilinear', align_corners=False)
             
         return out
+
+
+MODEL_REGISTRY: Dict[str, Type[nn.Module]] = {
+    "tinyunet": TinyUNet,
+}
+
+
+def list_available_models() -> List[str]:
+    """Retorna a lista ordenada de arquiteturas registradas no MODEL_REGISTRY."""
+    return sorted(MODEL_REGISTRY.keys())
+
+
+def build_model(
+    model_name: str = "tinyunet",
+    in_channels: int = 1,
+    base_channels: int = 8,
+    **kwargs: Any,
+) -> nn.Module:
+    """Instancia uma arquitetura pelo nome registrado em MODEL_REGISTRY."""
+    normalized_name = model_name.lower().strip()
+    if normalized_name not in MODEL_REGISTRY:
+        available = ", ".join(list_available_models())
+        raise ValueError(
+            f"Arquitetura '{model_name}' desconhecida. Modelos disponíveis: [{available}]"
+        )
+    model_cls = MODEL_REGISTRY[normalized_name]
+    return model_cls(in_channels=in_channels, base_channels=base_channels, **kwargs)
+

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from src.inference import enhance_signal, predict_mask, load_model
+
+from src.inference import enhance_signal, load_model, predict_mask
 from src.model import TinyUNet
 
 

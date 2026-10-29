@@ -1,8 +1,10 @@
-import numpy as np
+from typing import Tuple
+
 import librosa
 import librosa.display
-from typing import Tuple
 import matplotlib.pyplot as plt
+import numpy as np
+
 
 def compute_stft(audio: np.ndarray, n_fft: int = 512, hop_length: int = 256) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -55,6 +57,25 @@ def mix_at_snr(clean: np.ndarray, noise: np.ndarray, snr_db: float, eps: float =
     scaled_noise = noise * scale
     noisy = clean + scaled_noise
     return noisy.astype(np.float32), scaled_noise.astype(np.float32)
+
+
+def crop_or_pad_audio(audio: np.ndarray, target_samples: int) -> np.ndarray:
+    """
+    Ajusta o áudio para exatamente target_samples amostras.
+    Se for menor, aplica zero-padding no final.
+    Se for maior, seleciona a janela contígua de comprimento target_samples de maior energia (região de fala ativa).
+    """
+    if len(audio) < target_samples:
+        return np.pad(audio, (0, target_samples - len(audio)), mode="constant").astype(np.float32)
+    if len(audio) == target_samples:
+        return audio.astype(np.float32)
+
+    energy_prefix = np.empty(len(audio) + 1, dtype=np.float64)
+    energy_prefix[0] = 0.0
+    np.cumsum(np.square(audio, dtype=np.float64), out=energy_prefix[1:])
+    window_energies = energy_prefix[target_samples:] - energy_prefix[:-target_samples]
+    best_start = int(np.argmax(window_energies))
+    return audio[best_start : best_start + target_samples].astype(np.float32)
 
 
 def compute_irm(clean_mag: np.ndarray, noise_mag: np.ndarray, beta: float = 0.5) -> np.ndarray:
