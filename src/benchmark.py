@@ -335,7 +335,7 @@ def run_benchmark(
     algorithmic_latency = {
         "stft_window_ms": stft_window_ms,
         "hop_size_ms": hop_size_ms,
-        "model_causality": "non-causal (TinyUNet uses global pooling and 2D convolutions over full time frame)",
+        "model_causality": f"non-causal ({type(model).__name__} uses pooling and 2D convolutions over the full time frame)",
         "minimum_buffering_required_seconds": seconds,
     }
 

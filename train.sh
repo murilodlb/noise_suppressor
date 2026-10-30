@@ -66,7 +66,7 @@ uv sync
 
 if ! uv run --no-sync python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"; then
     echo "[i] PyTorch atual não possui suporte CUDA ativo. Instalando PyTorch com CUDA (${CUDA_WHEEL})..."
-    uv pip install --reinstall torch --index-url "https://download.pytorch.org/whl/${CUDA_WHEEL}"
+    uv pip install --reinstall-package torch torch --index-url "https://download.pytorch.org/whl/${CUDA_WHEEL}"
 fi
 
 # Verify CUDA is active inside PyTorch

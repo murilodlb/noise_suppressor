@@ -132,10 +132,14 @@ def evaluate(
     print(f"[i] Avaliando {len(eval_pairs)} amostras do split de validação (lc_db={lc_db:.1f} dB, threshold={threshold:.4f})...")
 
     records: List[Dict[str, Any]] = []
+    noise_cache: Dict[str, np.ndarray] = {}
 
     for i, pair in enumerate(eval_pairs, 1):
         clean_audio = _fix_audio_length(load_audio_file(pair["clean_file"], sr=sr), target_samples)
-        noise_audio = _fix_audio_length(load_audio_file(pair["noise_file"], sr=sr), target_samples)
+        noise_file = pair["noise_file"]
+        if noise_file not in noise_cache:
+            noise_cache[noise_file] = _fix_audio_length(load_audio_file(noise_file, sr=sr), target_samples)
+        noise_audio = noise_cache[noise_file]
         noisy_audio, matched_noise = mix_at_snr(clean_audio, noise_audio, pair["snr_db"])
 
         clean_mag, _ = compute_stft(clean_audio, n_fft=n_fft, hop_length=hop_length)

@@ -3,6 +3,7 @@ import glob
 import io
 import os
 import random
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -73,8 +74,14 @@ class NoiseSuppressionDataset(Dataset):
                 mono = soxr.resample(mono, file_sr, self.sr)
             return mono.astype(np.float32)
 
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            import imageio_ffmpeg
+
+            ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+
         ffmpeg_command = [
-            "ffmpeg",
+            ffmpeg_bin,
             "-v",
             "error",
             "-i",

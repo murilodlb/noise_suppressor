@@ -1,4 +1,5 @@
 import io
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,22 @@ class EnhancementResult:
     filtered_mag: np.ndarray
 
 
+def resolve_ffmpeg_executable() -> str:
+    """Resolves the ffmpeg binary from system PATH or the bundled imageio-ffmpeg package."""
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        raise FileNotFoundError(
+            "Binário 'ffmpeg' não encontrado no PATH do sistema nem via pacote 'imageio-ffmpeg'. "
+            "Execute 'uv sync' para instalar as dependências."
+        ) from exc
+
+
 def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
     """Loads an audio file as mono float32 at the target sample rate."""
     path = Path(file_path)
@@ -36,8 +53,9 @@ def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
             mono = soxr.resample(mono, file_sr, sr)
         return mono.astype(np.float32)
 
+    ffmpeg_bin = resolve_ffmpeg_executable()
     ffmpeg_command = [
-        "ffmpeg",
+        ffmpeg_bin,
         "-v",
         "error",
         "-i",

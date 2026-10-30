@@ -1,7 +1,16 @@
+from pathlib import Path
+from unittest import mock
+
 import numpy as np
 import torch
 
-from src.inference import enhance_signal, load_model, predict_mask
+from src.inference import (
+    enhance_signal,
+    load_audio_file,
+    load_model,
+    predict_mask,
+    resolve_ffmpeg_executable,
+)
 from src.model import TinyUNet
 
 
@@ -33,3 +42,17 @@ def test_load_model_fallback():
     model, cfg = load_model("non_existent_checkpoint.pth")
     assert isinstance(model, TinyUNet)
     assert cfg["sr"] == 16000
+
+
+def test_load_webm_without_system_ffmpeg():
+    """Simulates an HPC node without system ffmpeg in PATH and verifies imageio-ffmpeg fallback."""
+    with mock.patch("src.inference.shutil.which", return_value=None):
+        ffmpeg_exe = resolve_ffmpeg_executable()
+        assert Path(ffmpeg_exe).exists()
+
+        sample_webm = Path("data/noise/sample-1.webm")
+        if sample_webm.exists():
+            audio = load_audio_file(sample_webm, sr=16000)
+            assert audio.dtype == np.float32
+            assert len(audio) > 16000
+
