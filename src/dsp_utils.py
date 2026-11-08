@@ -1,9 +1,12 @@
-from typing import Tuple
+import random
+from typing import Optional, Tuple
 
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
+
+MIN_SPEECH_POWER: float = 1e-6
 
 
 def compute_stft(audio: np.ndarray, n_fft: int = 512, hop_length: int = 256) -> Tuple[np.ndarray, np.ndarray]:
@@ -76,6 +79,42 @@ def crop_or_pad_audio(audio: np.ndarray, target_samples: int) -> np.ndarray:
     window_energies = energy_prefix[target_samples:] - energy_prefix[:-target_samples]
     best_start = int(np.argmax(window_energies))
     return audio[best_start : best_start + target_samples].astype(np.float32)
+
+
+def is_silent_audio(audio: np.ndarray, min_power: float = MIN_SPEECH_POWER) -> bool:
+    """Retorna True se o áudio for vazio ou tiver potência média abaixo de min_power."""
+    if len(audio) == 0:
+        return True
+    power = float(np.mean(np.square(audio, dtype=np.float64)))
+    return power < min_power
+
+
+def sample_noise_window(
+    noise_audio: np.ndarray,
+    target_samples: int,
+    rng: Optional[random.Random] = None,
+) -> np.ndarray:
+    """
+    Amostra uma janela contígua de comprimento target_samples de um sinal de ruído mais longo,
+    evitando trechos silenciosos para aproveitar toda a extensão dos arquivos de ruído.
+    """
+    if len(noise_audio) < target_samples:
+        return np.pad(noise_audio, (0, target_samples - len(noise_audio)), mode="constant").astype(np.float32)
+    if len(noise_audio) == target_samples:
+        return noise_audio.astype(np.float32)
+
+    max_start = len(noise_audio) - target_samples
+    overall_power = float(np.mean(np.square(noise_audio, dtype=np.float64)))
+    min_window_power = max(1e-8, 0.1 * overall_power)
+    rand_int = rng.randint if rng is not None else random.randint
+
+    for _ in range(5):
+        start = rand_int(0, max_start)
+        candidate = noise_audio[start : start + target_samples]
+        if float(np.mean(np.square(candidate, dtype=np.float64))) >= min_window_power:
+            return candidate.astype(np.float32)
+
+    return crop_or_pad_audio(noise_audio, target_samples)
 
 
 def compute_irm(clean_mag: np.ndarray, noise_mag: np.ndarray, beta: float = 0.5) -> np.ndarray:

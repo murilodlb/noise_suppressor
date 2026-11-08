@@ -90,6 +90,8 @@ def load_model(
     resolved_model_name = (model_name or "tinyunet").lower().strip()
     dsp_config: Dict[str, Any] = {
         "model_name": resolved_model_name,
+        "loss_name": "unknown",
+        "epoch": None,
         "sr": 16000,
         "n_fft": 512,
         "hop_length": 256,
@@ -104,6 +106,8 @@ def load_model(
                 resolved_model_name = str(checkpoint.get("model_name", model_name or "tinyunet")).lower().strip()
                 base_ch = int(checkpoint.get("base_channels", base_channels))
                 dsp_config["model_name"] = resolved_model_name
+                dsp_config["loss_name"] = str(checkpoint.get("loss_name", "bce")).lower().strip()
+                dsp_config["epoch"] = checkpoint.get("epoch", None)
                 dsp_config["base_channels"] = base_ch
                 dsp_config["sr"] = checkpoint.get("sr", 16000)
                 dsp_config["n_fft"] = checkpoint.get("n_fft", 512)

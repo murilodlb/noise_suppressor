@@ -1,8 +1,10 @@
+import json
 import numpy as np
 import torch
 import torch.nn as nn
 
 from src.benchmark import count_macs, count_parameters
+from src.cli import main as cli_main
 from src.inference import enhance_signal, load_model
 from src.model import DSTinyUNet, TinyUNet, build_model, list_available_models
 
@@ -63,3 +65,37 @@ def test_ds_tinyunet_checkpoint_roundtrip(tmp_path):
     loaded_model, dsp_config = load_model(ckpt_path, device=torch.device("cpu"))
     assert isinstance(loaded_model, DSTinyUNet)
     assert dsp_config["model_name"] == "ds_tinyunet"
+
+
+def test_cli_benchmark_model_flag_ignores_default_tinyunet_checkpoint(tmp_path, monkeypatch):
+    # Simula um diretório de trabalho que possui checkpoints/tinyunet.pth (base_channels=8)
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    tiny_model = TinyUNet(in_channels=1, base_channels=8)
+    torch.save(
+        {"model_name": "tinyunet", "base_channels": 8, "model_state_dict": tiny_model.state_dict()},
+        ckpt_dir / "tinyunet.pth",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    out_json = tmp_path / "bench_ds.json"
+    exit_code = cli_main(
+        [
+            "benchmark",
+            "--model",
+            "ds_tinyunet",
+            "--base_channels",
+            "16",
+            "--warmup",
+            "1",
+            "--repeats",
+            "2",
+            "--output_path",
+            str(out_json),
+        ]
+    )
+    assert exit_code == 0
+    report = json.loads(out_json.read_text(encoding="utf-8"))
+    assert report["model_name"] == "ds_tinyunet"
+    assert report["base_channels"] == 16
+

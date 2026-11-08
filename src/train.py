@@ -14,12 +14,14 @@ try:
         NoiseSuppressionDataset,
         PrecomputedNoiseSuppressionDataset,
     )
+    from .losses import build_loss, list_available_losses
     from .model import build_model, list_available_models
 except ImportError:
     from dataset_builder import (
         NoiseSuppressionDataset,
         PrecomputedNoiseSuppressionDataset,
     )
+    from losses import build_loss, list_available_losses
     from model import build_model, list_available_models
 
 
@@ -92,6 +94,9 @@ def train(
     snr_range: tuple[float, float] = (-5.0, 15.0),
     device: str = "auto",
     model_name: str = "tinyunet",
+    loss_name: str = "bce",
+    scheduler_patience: int = 5,
+    scheduler_type: str = "plateau",
 ) -> Path:
     torch.manual_seed(seed)
     random.seed(seed)
@@ -99,8 +104,14 @@ def train(
         torch.cuda.manual_seed_all(seed)
 
     normalized_model_name = model_name.lower().strip()
+    normalized_loss_name = loss_name.lower().strip()
+    normalized_scheduler = scheduler_type.lower().strip()
+    if normalized_scheduler not in ("plateau", "cosine"):
+        raise ValueError(f"Scheduler '{scheduler_type}' inválido. Use 'plateau' ou 'cosine'.")
     if checkpoint_path is None:
-        checkpoint_path = Path(f"checkpoints/{normalized_model_name}.pth")
+        checkpoint_path = Path(
+            f"checkpoints/{normalized_model_name}_ch{base_channels}_{normalized_loss_name}.pth"
+        )
 
     sr = 16000
     n_fft = 512
@@ -200,15 +211,27 @@ def train(
         in_channels=1,
         base_channels=base_channels,
     ).to(resolved_device)
-    criterion = nn.BCELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=0.5,
-        patience=2,
-        min_lr=1e-6,
+    criterion = build_loss(normalized_loss_name).to(resolved_device)
+    print(
+        f"[i] Modelo: {normalized_model_name} (ch={base_channels}) | "
+        f"Função de perda: {normalized_loss_name} | "
+        f"scheduler={normalized_scheduler} (patience={scheduler_patience})"
     )
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    if normalized_scheduler == "cosine":
+        scheduler: torch.optim.lr_scheduler.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(1, epochs),
+            eta_min=1e-6,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.5,
+            patience=scheduler_patience,
+            min_lr=1e-6,
+        )
 
     best_validation_loss = float("inf")
 
@@ -223,8 +246,9 @@ def train(
 
             optimizer.zero_grad(set_to_none=True)
             predicted_mask = model(noisy_mag)
-            loss = criterion(predicted_mask, irm)
+            loss = criterion(predicted_mask, irm, noisy_mag)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
             train_loss_sum += loss.item() * noisy_mag.size(0)
@@ -245,7 +269,7 @@ def train(
                 noisy_mag = noisy_mag.to(resolved_device, non_blocking=use_cuda)
                 irm = irm.to(resolved_device, non_blocking=use_cuda)
                 predicted_mask = model(noisy_mag)
-                loss = criterion(predicted_mask, irm)
+                loss = criterion(predicted_mask, irm, noisy_mag)
                 validation_loss_sum += loss.item() * noisy_mag.size(0)
                 _print_progress_bar(
                     batch_index,
@@ -258,7 +282,10 @@ def train(
 
         mean_train_loss = train_loss_sum / len(train_loader.dataset)
         mean_validation_loss = validation_loss_sum / len(validation_loader.dataset)
-        scheduler.step(mean_validation_loss)
+        if normalized_scheduler == "cosine":
+            scheduler.step()
+        else:
+            scheduler.step(mean_validation_loss)
         current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:02d}/{epochs} | train_loss={mean_train_loss:.4f} | "
@@ -270,6 +297,9 @@ def train(
             torch.save(
                 {
                     "model_name": normalized_model_name,
+                    "loss_name": normalized_loss_name,
+                    "scheduler_type": normalized_scheduler,
+                    "scheduler_patience": scheduler_patience,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
@@ -292,7 +322,17 @@ def train(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Treina um modelo registrado para supressão de ruído.")
     parser.add_argument("--model", type=str, default="tinyunet", choices=list_available_models(), help="Arquitetura a treinar.")
+    parser.add_argument("--loss", type=str, default="bce", choices=list_available_losses(), help="Função de perda.")
+    parser.add_argument("--scheduler", type=str, default="plateau", choices=["plateau", "cosine"], help="Tipo de agendador de LR.")
+    parser.add_argument("--scheduler_patience", type=int, default=5, help="Paciência do ReduceLROnPlateau.")
     parser.add_argument("--epochs", type=int, default=20, help="Numero de epocas de treino.")
     parser.add_argument("--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0).")
     args = parser.parse_args()
-    train(epochs=args.epochs, device=args.device, model_name=args.model)
+    train(
+        epochs=args.epochs,
+        device=args.device,
+        model_name=args.model,
+        loss_name=args.loss,
+        scheduler_patience=args.scheduler_patience,
+        scheduler_type=args.scheduler,
+    )

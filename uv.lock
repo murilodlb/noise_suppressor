@@ -755,6 +755,7 @@ dependencies = [
     { name = "pystoi" },
     { name = "ruff" },
     { name = "soundfile" },
+    { name = "soxr" },
     { name = "torch", version = "2.14.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -774,6 +775,7 @@ requires-dist = [
     { name = "pystoi", specifier = ">=0.4.1" },
     { name = "ruff", specifier = ">=0.17.3" },
     { name = "soundfile", specifier = ">=0.12.1" },
+    { name = "soxr", specifier = ">=0.3.0" },
     { name = "torch", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cpu" },
 ]
 

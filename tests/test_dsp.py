@@ -9,7 +9,13 @@ from src.dataset_builder import (
     NoiseSuppressionDataset,
     PrecomputedNoiseSuppressionDataset,
 )
-from src.dsp_utils import crop_or_pad_audio, mix_at_snr, plot_spectrograms
+from src.dsp_utils import (
+    crop_or_pad_audio,
+    is_silent_audio,
+    mix_at_snr,
+    plot_spectrograms,
+    sample_noise_window,
+)
 from src.metrics import compute_snr
 
 SR = 16000
@@ -121,4 +127,51 @@ def test_crop_or_pad_audio_pads_short_signal():
     assert len(padded) == 32000
     assert np.allclose(padded[:16000], short_signal)
     assert np.all(padded[16000:] == 0.0)
+
+
+def test_is_silent_audio_detects_zero_and_quantization_floor():
+    assert is_silent_audio(np.zeros(32000, dtype=np.float32))
+    assert is_silent_audio(np.full(32000, 1e-5, dtype=np.float32))
+    assert not is_silent_audio(_make_clean(32000))
+
+
+def test_sample_noise_window_extracts_varied_non_silent_segments():
+    import random
+
+    # 6.0s de ruído onde os primeiros 2.0s são silenciosos e os 4.0s finais têm energia distinta
+    rng_np = np.random.default_rng(7)
+    long_noise = np.zeros(96000, dtype=np.float32)
+    long_noise[32000:] = (0.2 * rng_np.standard_normal(64000)).astype(np.float32)
+
+    win1 = sample_noise_window(long_noise, 32000, rng=random.Random(10))
+    win2 = sample_noise_window(long_noise, 32000, rng=random.Random(20))
+    assert len(win1) == 32000 and len(win2) == 32000
+    assert not is_silent_audio(win1)
+    assert not is_silent_audio(win2)
+    assert not np.allclose(win1, win2)
+
+
+def test_export_precomputed_dataset_skips_silent_clean_files(tmp_path):
+    import soundfile as sf
+
+    clean_dir = tmp_path / "clean"
+    noise_dir = tmp_path / "noise"
+    out_dir = tmp_path / "precomputed"
+    clean_dir.mkdir()
+    noise_dir.mkdir()
+
+    sf.write(clean_dir / "valid.wav", _make_clean(32000), SR)
+    sf.write(clean_dir / "silent.wav", np.zeros(32000, dtype=np.float32), SR)
+    sf.write(noise_dir / "noise.wav", (0.1 * np.random.default_rng(0).standard_normal(32000)).astype(np.float32), SR)
+
+    meta_path = PrecomputedNoiseSuppressionDataset.export_precomputed_dataset(
+        clean_dir=str(clean_dir),
+        noise_dir=str(noise_dir),
+        output_dir=str(out_dir),
+        sr=SR,
+    )
+    dataset = PrecomputedNoiseSuppressionDataset(str(out_dir))
+    assert meta_path.exists()
+    assert len(dataset) == 1
+
 

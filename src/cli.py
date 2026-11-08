@@ -7,6 +7,7 @@ import soundfile as sf
 
 from .dsp_utils import compute_stft
 from .inference import enhance_signal, load_audio_file, load_model
+from .losses import list_available_losses
 from .metrics import compute_signal_metrics
 from .model import list_available_models
 
@@ -29,17 +30,26 @@ def _build_parser() -> argparse.ArgumentParser:
     p_prep.add_argument("--snr_high", type=float, default=15.0, help="Upper bound of the SNR sampling range (dB)")
 
     available_models = list_available_models()
+    available_losses = list_available_losses()
 
     # 2. Train
     p_train = subparsers.add_parser("train", help="Train a registered noise suppression model")
     p_train.add_argument("--model", type=str, default="tinyunet", choices=available_models, help="Model architecture to train")
+    p_train.add_argument("--loss", type=str, default="bce", choices=available_losses, help="Loss function for mask optimization")
+    p_train.add_argument("--scheduler", type=str, default="plateau", choices=["plateau", "cosine"], help="LR scheduler ('plateau' or 'cosine')")
+    p_train.add_argument("--scheduler_patience", type=int, default=5, help="ReduceLROnPlateau patience (epochs)")
     p_train.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
     p_train.add_argument("--batch_size", type=int, default=4, help="Batch size")
     p_train.add_argument("--learning_rate", type=float, default=1e-3, help="Initial Adam learning rate")
     p_train.add_argument("--validation_ratio", type=float, default=0.2, help="Ratio of clean sources for validation")
     p_train.add_argument("--seed", type=int, default=42, help="Random seed")
     p_train.add_argument("--data_root", type=str, default="data", help="Root directory for dataset")
-    p_train.add_argument("--checkpoint_path", type=str, default=None, help="Checkpoint save path (default: checkpoints/<model>.pth)")
+    p_train.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Checkpoint save path (default: checkpoints/<model>_ch<base_channels>_<loss>.pth)",
+    )
     p_train.add_argument("--base_channels", type=int, default=8, help="Base channel count for the model")
     p_train.add_argument("--num_workers", type=int, default=0, help="PyTorch DataLoader worker count")
     p_train.add_argument("--snr_low", type=float, default=-5.0, help="Lower SNR bound (dB) for online mixing")
@@ -78,7 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # 6. Benchmark
     p_bench = subparsers.add_parser("benchmark", help="Benchmark MACs, parameters, memory, latency, and RTF")
-    p_bench.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Model checkpoint path")
+    p_bench.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Optional model checkpoint path; if omitted, benchmarks architecture specified by --model and --base_channels",
+    )
     p_bench.add_argument("--model", type=str, default=None, choices=available_models, help="Model architecture to benchmark (overrides checkpoint or benchmarks untrained model)")
     p_bench.add_argument("--base_channels", type=int, default=8, help="Base channels when benchmarking an uninitialized model")
     p_bench.add_argument("--seconds", type=float, default=2.0, help="Duration of test audio in seconds")
@@ -159,6 +174,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             snr_range=(args.snr_low, args.snr_high),
             device=args.device,
             model_name=args.model,
+            loss_name=args.loss,
+            scheduler_patience=args.scheduler_patience,
+            scheduler_type=args.scheduler,
         )
     elif args.command == "infer":
         run_infer(
@@ -194,7 +212,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "benchmark":
         from .benchmark import run_benchmark
-        ckpt_arg = None if (args.model is not None and args.checkpoint_path == "checkpoints/tinyunet.pth" and not Path(f"checkpoints/{args.model}.pth").exists()) else args.checkpoint_path
+        if args.checkpoint_path is not None:
+            ckpt_arg: Optional[Path | str] = Path(args.checkpoint_path)
+        elif args.model is None:
+            default_ckpt = Path("checkpoints/tinyunet.pth")
+            ckpt_arg = default_ckpt if default_ckpt.exists() else None
+        else:
+            ckpt_arg = None
         run_benchmark(
             checkpoint_path=ckpt_arg,
             seconds=args.seconds,

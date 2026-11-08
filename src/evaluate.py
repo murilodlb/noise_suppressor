@@ -15,7 +15,9 @@ from .dsp_utils import (
     compute_istft,
     compute_stft,
     crop_or_pad_audio,
+    is_silent_audio,
     mix_at_snr,
+    sample_noise_window,
 )
 from .inference import enhance_signal, load_audio_file, load_model
 from .metrics import (
@@ -51,6 +53,18 @@ def _fix_audio_length(audio: np.ndarray, target_samples: int) -> np.ndarray:
     return crop_or_pad_audio(audio, target_samples)
 
 
+def summarize_metric_values(values: List[float]) -> Dict[str, float]:
+    """Calcula média, desvio padrão e mediana ignorando valores NaN e ±Inf."""
+    arr = np.array([v for v in values if np.isfinite(v)], dtype=np.float64)
+    if len(arr) == 0:
+        return {"mean": float("nan"), "std": float("nan"), "median": float("nan")}
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr)),
+        "median": float(np.median(arr)),
+    }
+
+
 def evaluate(
     checkpoint_path: Optional[str | Path] = "checkpoints/tinyunet.pth",
     data_root: str | Path = "data",
@@ -75,6 +89,9 @@ def evaluate(
     model.eval()
 
     resolved_model_name = dsp_config.get("model_name", model_name or "tinyunet")
+    resolved_loss_name = dsp_config.get("loss_name", "unknown")
+    resolved_base_channels = int(dsp_config.get("base_channels", 8))
+    resolved_epochs = dsp_config.get("epoch") if dsp_config.get("epoch") is not None else "unknown"
 
     sr = dsp_config.get("sr", 16000)
     n_fft = dsp_config.get("n_fft", 512)
@@ -133,13 +150,22 @@ def evaluate(
 
     records: List[Dict[str, Any]] = []
     noise_cache: Dict[str, np.ndarray] = {}
+    skipped_silent = 0
 
     for i, pair in enumerate(eval_pairs, 1):
         clean_audio = _fix_audio_length(load_audio_file(pair["clean_file"], sr=sr), target_samples)
+        if is_silent_audio(clean_audio):
+            skipped_silent += 1
+            print(f" [!] Pulando amostra silenciosa/corrompida ({pair['clean_file']})...")
+            continue
         noise_file = pair["noise_file"]
         if noise_file not in noise_cache:
-            noise_cache[noise_file] = _fix_audio_length(load_audio_file(noise_file, sr=sr), target_samples)
-        noise_audio = noise_cache[noise_file]
+            noise_cache[noise_file] = load_audio_file(noise_file, sr=sr)
+        noise_audio = sample_noise_window(
+            noise_cache[noise_file],
+            target_samples,
+            rng=random.Random(seed + i),
+        )
         noisy_audio, matched_noise = mix_at_snr(clean_audio, noise_audio, pair["snr_db"])
 
         clean_mag, _ = compute_stft(clean_audio, n_fft=n_fft, hop_length=hop_length)
@@ -228,15 +254,7 @@ def evaluate(
             print(f" - [{i}/{len(eval_pairs)}] processados...")
 
     # Aggregating metrics
-    def summarize(values: List[float]) -> Dict[str, float]:
-        arr = np.array([v for v in values if not np.isnan(v)])
-        if len(arr) == 0:
-            return {"mean": float("nan"), "std": float("nan"), "median": float("nan")}
-        return {
-            "mean": float(np.mean(arr)),
-            "std": float(np.std(arr)),
-            "median": float(np.median(arr)),
-        }
+    summarize = summarize_metric_values
 
     metric_names = [
         "si_sdr", "snr", "seg_snr", "pesq", "stoi", "estoi",
@@ -303,7 +321,8 @@ def evaluate(
         }
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir_path = Path(output_dir) / timestamp
+    folder_tag = f"{timestamp}_{resolved_model_name}_ch{resolved_base_channels}_{resolved_loss_name}"
+    out_dir_path = Path(output_dir) / folder_tag
     out_dir_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Save per_sample.csv
@@ -317,6 +336,9 @@ def evaluate(
     full_results = {
         "timestamp": timestamp,
         "model_name": resolved_model_name,
+        "base_channels": resolved_base_channels,
+        "loss_name": resolved_loss_name,
+        "trained_epoch": resolved_epochs,
         "checkpoint": str(checkpoint_path),
         "total_samples": len(records),
         "threshold_config": {
@@ -342,6 +364,9 @@ def evaluate(
 
 - **Date:** {timestamp}
 - **Model Architecture:** `{resolved_model_name}`
+- **Base Channels:** `{resolved_base_channels}`
+- **Loss Function:** `{resolved_loss_name}`
+- **Trained Epoch:** `{resolved_epochs}`
 - **Checkpoint:** `{checkpoint_path}`
 - **Validation Samples:** {len(records)}
 - **T-F Mask Decision Threshold (LC = {lc_db} dB):** {threshold:.4f}

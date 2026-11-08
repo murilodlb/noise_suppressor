@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pytest
 
+from src.evaluate import summarize_metric_values
 from src.metrics import (
     compute_attenuation_metrics,
     compute_mask_classification_metrics,
@@ -107,4 +108,19 @@ def test_compute_stoi_returns_nan_on_short_active_speech():
     short_burst[:1600] = (0.5 * np.sin(2 * np.pi * 250 * t)).astype(np.float32)
     stoi_val = compute_stoi(short_burst, short_burst, sr=sr)
     assert math.isnan(stoi_val)
+
+
+def test_summarize_metric_values_ignores_nan_and_inf():
+    values = [10.0, 20.0, float("nan"), float("-inf"), float("inf")]
+    summary = summarize_metric_values(values)
+    assert math.isclose(summary["mean"], 15.0, rel_tol=1e-6)
+    assert math.isclose(summary["median"], 15.0, rel_tol=1e-6)
+    assert math.isclose(summary["std"], 5.0, rel_tol=1e-6)
+
+    all_non_finite = [float("nan"), float("-inf"), float("inf")]
+    empty_summary = summarize_metric_values(all_non_finite)
+    assert math.isnan(empty_summary["mean"])
+    assert math.isnan(empty_summary["std"])
+    assert math.isnan(empty_summary["median"])
+
 

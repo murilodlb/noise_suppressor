@@ -20,16 +20,20 @@ try:
         compute_irm,
         compute_stft,
         crop_or_pad_audio,
+        is_silent_audio,
         mix_at_snr,
         preprocess_noisy_magnitude,
+        sample_noise_window,
     )
 except ImportError:
     from dsp_utils import (
         compute_irm,
         compute_stft,
         crop_or_pad_audio,
+        is_silent_audio,
         mix_at_snr,
         preprocess_noisy_magnitude,
+        sample_noise_window,
     )
 
 
@@ -102,8 +106,12 @@ class NoiseSuppressionDataset(Dataset):
 
     def _get_cached_noise_audio(self, noise_file: str) -> np.ndarray:
         if noise_file not in self._noise_cache:
-            self._noise_cache[noise_file] = self._fix_length(self._load_audio(noise_file))
+            self._noise_cache[noise_file] = self._load_audio(noise_file)
         return self._noise_cache[noise_file]
+
+    def _sample_noise_segment(self, noise_file: str, rng: Optional[random.Random] = None) -> np.ndarray:
+        full_noise = self._get_cached_noise_audio(noise_file)
+        return sample_noise_window(full_noise, self.target_num_samples, rng=rng)
 
     def _fix_length(self, audio: np.ndarray) -> np.ndarray:
         return crop_or_pad_audio(audio, self.target_num_samples)
@@ -141,6 +149,7 @@ class NoiseSuppressionDataset(Dataset):
 
         total_samples = len(self.clean_files) * samples_per_clean
         sample_counter = 0
+        skipped_silent = 0
 
         with metadata_path.open("w", newline="", encoding="utf-8") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
@@ -148,11 +157,14 @@ class NoiseSuppressionDataset(Dataset):
 
             for clean_file in self.clean_files:
                 clean_audio = self._fix_length(self._load_audio(clean_file))
+                if is_silent_audio(clean_audio):
+                    skipped_silent += 1
+                    continue
                 clean_stem = Path(clean_file).stem
 
                 for sample_index in range(samples_per_clean):
                     noise_file = random.choice(self.noise_files)
-                    noise_audio = self._get_cached_noise_audio(noise_file)
+                    noise_audio = self._sample_noise_segment(noise_file)
                     noisy_audio, _, snr_db = self._add_noise(clean_audio, noise_audio)
 
                     output_name = f"{clean_stem}__noise-{Path(noise_file).stem}__{sample_index:03d}.wav"
@@ -178,6 +190,8 @@ class NoiseSuppressionDataset(Dataset):
 
         if total_samples > 0:
             print()
+        if skipped_silent > 0:
+            print(f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6).")
 
         return metadata_path
 
@@ -187,7 +201,7 @@ class NoiseSuppressionDataset(Dataset):
         clean_audio = self._fix_length(self._load_audio(clean_path))
         
         noise_path = random.choice(self.noise_files)
-        noise_audio = self._get_cached_noise_audio(noise_path)
+        noise_audio = self._sample_noise_segment(noise_path)
         
         # 2. Soma limpa + ruído no domínio do tempo
         # SNR sorteada a cada chamada (augmentation on-the-fly)
@@ -293,14 +307,18 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
             writer.writeheader()
 
             sample_counter = 0
+            skipped_silent = 0
             for clean_file in source_dataset.clean_files:
                 clean_audio = source_dataset._fix_length(source_dataset._load_audio(clean_file))
+                if is_silent_audio(clean_audio):
+                    skipped_silent += 1
+                    continue
                 clean_stem = Path(clean_file).stem
                 clean_mag, _ = compute_stft(clean_audio, n_fft, hop_length)
 
                 for sample_index in range(samples_per_clean):
                     noise_file = random.choice(source_dataset.noise_files)
-                    noise_audio = source_dataset._get_cached_noise_audio(noise_file)
+                    noise_audio = source_dataset._sample_noise_segment(noise_file)
                     noisy_audio, noise_audio_matched, snr_db = source_dataset._add_noise(clean_audio, noise_audio)
 
                     noise_mag, _ = compute_stft(noise_audio_matched, n_fft, hop_length)
@@ -333,6 +351,8 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
 
         if total_samples > 0:
             print()
+        if skipped_silent > 0:
+            print(f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6).")
 
         temp_metadata_path.replace(metadata_path)
 
