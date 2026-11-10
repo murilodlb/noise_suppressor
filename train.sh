@@ -15,54 +15,64 @@ set -euo pipefail
 # GUIA DE EXPERIMENTOS NO HPC & PRESETS RECOMENDADOS:
 # ==============================================================================
 #
-# Diagnóstico dos testes anteriores (20261104_103906 / slurm-2236311):
-#  1. 47 arquivos corrompidos/silenciosos em data/clean/ (ex.: sample-001682.mp3 com
-#     potência 8.6e-12) geravam SNR de -81 dB e inflavam o desvio padrão de 5.6 dB
-#     para 8.3 dB, além de causar picos de val_loss no treino. Agora são filtrados.
-#  2. Os 10 arquivos .webm de ruído somam 100.2s, mas antes apenas uma janela fixa
-#     de 2.0s por arquivo era usada. Agora janelas ativas de 2.0s são sorteadas ao
-#     longo de toda a extensão dos arquivos de ruído.
-#  3. A pasta data/precomputed/ no HPC era de 28/Out. Este script detecta automaticamente
-#     se o metadata.csv antigo ainda contém arquivos silenciosos (sample-000100.mp3)
-#     e regenera os tensores .pt limpos automaticamente.
+# Evolução após os experimentos de 08/Nov (20261108_* / slurm-2246*):
+#  1. Expansão de Ruído Não-Estacionário (augment_noise): transforma os 10 arquivos
+#     .webm base em +90 arquivos .wav sintéticos (100 arquivos no total) via
+#     concatenação com crossfade, superposição multi-fonte, pitch/rate shift e LFO.
+#  2. Nova arquitetura ResTinyUNet (res_tinyunet): adiciona codificação posicional
+#     de frequência (CoordConv), blocos residuais com Squeeze-and-Excitation (SE),
+#     bottleneck dilatado (campo receptivo 2x maior) e interpolação pré-sigmoid.
+#  3. Novo ciclo Infer-Loss-Update (asym_mag_mse + AdamW + Warmup + SpecAugment):
+#     combina ponderação por energia espectral, penalização assimétrica de Recall
+#     para proteger a fala e termo L1 contra o platô de gradiente, mais perturbação
+#     on-the-fly do espectrograma (--augment_spec) durante as 80 épocas.
 #
-# --- EXECUÇÃO PADRÃO (Recomendada: TinyUNet ch=16 + mag_mse + Cosine LR) ---
+# --- EXECUÇÃO PADRÃO (Novo Preset Recomendado: ResTinyUNet + asym_mag_mse + 100 ruídos) ---
 #   sbatch train.sh
 #
-# --- PRESET 1: Comparação Direta de Eficiência TinyML (TinyUNet vs DSTinyUNet) ---
-#   MODEL=tinyunet    BASE_CHANNELS=8  LOSS=mag_mse sbatch train.sh
-#   MODEL=ds_tinyunet BASE_CHANNELS=8  LOSS=mag_mse sbatch train.sh
-#   MODEL=ds_tinyunet BASE_CHANNELS=16 LOSS=mag_mse sbatch train.sh
+# --- PRESET 1: Comparação Direta de Arquiteturas com o Novo Ciclo (ch=16, SPC=3) ---
+#   MODEL=tinyunet     BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
+#   MODEL=ds_tinyunet  BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
+#   MODEL=res_tinyunet BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
+#   MODEL=res_tinyunet BASE_CHANNELS=24 LOSS=asym_mag_mse sbatch train.sh
 #
-# --- PRESET 2: Varredura Completa de Funções de Perda (Ablation Study) ---
-# for model_name in tinyunet ds_tinyunet; do
-#   for loss_name in bce mse l1 bce_l1 mag_mse; do
-#     sbatch --job-name="${model_name}-${loss_name}" \
-#       --export=ALL,MODEL="${model_name}",LOSS="${loss_name}",BASE_CHANNELS=16,SCHEDULER=cosine,EPOCHS=80,BATCH_SIZE=16,LR=2e-3 \
-#       train.sh
-#   done
+# --- PRESET 2: Comparação de Eficiência TinyML Embarcado (ch=8) ---
+#   MODEL=tinyunet     BASE_CHANNELS=8 LOSS=asym_mag_mse sbatch train.sh
+#   MODEL=ds_tinyunet  BASE_CHANNELS=8 LOSS=asym_mag_mse sbatch train.sh
+#   MODEL=res_tinyunet BASE_CHANNELS=8 LOSS=asym_mag_mse sbatch train.sh
+#
+# --- PRESET 3: Ablation Study das Funções de Perda na ResTinyUNet ---
+# for loss_name in bce mse l1 bce_l1 mag_mse asym_mag_mse; do
+#   sbatch --job-name="res-${loss_name}" \
+#     --export=ALL,MODEL=res_tinyunet,LOSS="${loss_name}",BASE_CHANNELS=16,SCHEDULER=cosine,EPOCHS=80 \
+#     train.sh
 # done
 #
-# --- PRESET 3: Forçar Regeneração do Dataset com 3x Data Augmentation ---
-#   FORCE_PREPROCESS=1 SAMPLES_PER_CLEAN=3 LOSS=mag_mse sbatch train.sh
+# --- PRESET 4: Forçar Regeneração Completa do Banco de Ruídos + Dataset (.pt) ---
+#   FORCE_AUGMENT_NOISE=1 FORCE_PREPROCESS=1 SAMPLES_PER_CLEAN=3 sbatch train.sh
 # ==============================================================================
 
-MODEL="${MODEL:-tinyunet}"
-LOSS="${LOSS:-mag_mse}"
+MODEL="${MODEL:-res_tinyunet}"
+LOSS="${LOSS:-asym_mag_mse}"
 SCHEDULER="${SCHEDULER:-cosine}"
 PATIENCE="${PATIENCE:-6}"
 EPOCHS="${EPOCHS:-80}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 LR="${LR:-2e-3}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 BASE_CHANNELS="${BASE_CHANNELS:-16}"
 VALIDATION_RATIO="${VALIDATION_RATIO:-0.2}"
 SNR_LOW="${SNR_LOW:--5.0}"
 SNR_HIGH="${SNR_HIGH:-15.0}"
 SEED="${SEED:-42}"
 NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-4}}"
-SAMPLES_PER_CLEAN="${SAMPLES_PER_CLEAN:-1}"
+SAMPLES_PER_CLEAN="${SAMPLES_PER_CLEAN:-3}"
+AUGMENT_NOISE="${AUGMENT_NOISE:-1}"
+AUGMENT_NOISE_FILES="${AUGMENT_NOISE_FILES:-90}"
+FORCE_AUGMENT_NOISE="${FORCE_AUGMENT_NOISE:-0}"
+AUGMENT_SPEC="${AUGMENT_SPEC:-1}"
 FORCE_PREPROCESS="${FORCE_PREPROCESS:-0}"
-EXP_TAG="${MODEL}_ch${BASE_CHANNELS}_${LOSS}_${SCHEDULER}_ep${EPOCHS}_bs${BATCH_SIZE}"
+EXP_TAG="${MODEL}_ch${BASE_CHANNELS}_${LOSS}_${SCHEDULER}_ep${EPOCHS}_bs${BATCH_SIZE}_spc${SAMPLES_PER_CLEAN}"
 CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/${EXP_TAG}.pth}"
 BENCHMARK_PATH="${BENCHMARK_PATH:-reports/benchmark/benchmark_${EXP_TAG}.json}"
 CUDA_WHEEL="${CUDA_WHEEL:-cu124}"
@@ -81,8 +91,10 @@ echo " Loss Function   : ${LOSS}"
 echo " LR Scheduler    : ${SCHEDULER} (patience=${PATIENCE})"
 echo " Epochs          : ${EPOCHS}"
 echo " Batch Size      : ${BATCH_SIZE}"
-echo " Learning Rate   : ${LR}"
+echo " Learning Rate   : ${LR} (weight_decay=${WEIGHT_DECAY})"
 echo " Samples / Clean : ${SAMPLES_PER_CLEAN}"
+echo " Augment Noise   : ${AUGMENT_NOISE} (num_files=${AUGMENT_NOISE_FILES})"
+echo " Augment Spec    : ${AUGMENT_SPEC}"
 echo " DataLoader Wrks : ${NUM_WORKERS}"
 echo " Checkpoint Path : ${CHECKPOINT_PATH}"
 echo " Benchmark Path  : ${BENCHMARK_PATH}"
@@ -128,9 +140,23 @@ print(f" - Device count    : {torch.cuda.device_count()}")
 print(f" - GPU 0           : {torch.cuda.get_device_name(0)}")
 EOF
 
-# 4. Precompute dataset if missing, forced, or generated before silent-file filtering
-echo "[3/6] Verificando dataset pré-computado..."
+# 4. Expand non-stationary noise bank (run once if missing or forced) and precompute dataset
+echo "[3/6] Verificando banco de ruídos expandido e dataset pré-computado..."
 NEED_PREPROCESS=0
+if [ "${AUGMENT_NOISE}" = "1" ]; then
+    if [ "${FORCE_AUGMENT_NOISE}" = "1" ] || [ ! -f "data/noise/aug_noise_0001.wav" ]; then
+        echo "[i] Sintetizando ${AUGMENT_NOISE_FILES} novos arquivos de ruído não-estacionário em data/noise/..."
+        uv run --no-sync noise_suppressor augment_noise \
+            --noise_dir data/noise \
+            --num_files "${AUGMENT_NOISE_FILES}" \
+            --duration 10.0 \
+            --seed "${SEED}"
+        NEED_PREPROCESS=1
+    else
+        echo "[i] Banco de ruídos expandido (aug_noise_*.wav) já presente em data/noise/."
+    fi
+fi
+
 if [ "${FORCE_PREPROCESS}" = "1" ]; then
     echo "[i] FORCE_PREPROCESS=1 definido. Regenerando dataset pré-computado..."
     NEED_PREPROCESS=1
@@ -139,6 +165,9 @@ elif [ ! -f "data/precomputed/metadata.csv" ] || [ -z "$(find data/precomputed -
     NEED_PREPROCESS=1
 elif grep -q "sample-000100.mp3" "data/precomputed/metadata.csv" 2>/dev/null; then
     echo "[i] Dataset pré-computado antigo detectado (contém arquivos silenciosos sem filtro). Regenerando..."
+    NEED_PREPROCESS=1
+elif [ "${AUGMENT_NOISE}" = "1" ] && ! grep -q "aug_noise_" "data/precomputed/metadata.csv" 2>/dev/null; then
+    echo "[i] Dataset pré-computado atual ainda não inclui os novos ruídos aug_noise_*.wav. Regenerando..."
     NEED_PREPROCESS=1
 fi
 
@@ -154,6 +183,11 @@ fi
 
 # 5. Run GPU training
 # Note: --no-sync prevents uv from reverting the CUDA torch wheel back to the CPU lockfile entry
+TRAIN_EXTRA_ARGS=()
+if [ "${AUGMENT_SPEC}" = "1" ]; then
+    TRAIN_EXTRA_ARGS+=(--augment_spec)
+fi
+
 echo "[4/6] Iniciando treinamento do modelo '${MODEL}' (ch=${BASE_CHANNELS}, loss='${LOSS}', scheduler='${SCHEDULER}') em GPU (CUDA)..."
 uv run --no-sync noise_suppressor train \
     --model "${MODEL}" \
@@ -164,13 +198,15 @@ uv run --no-sync noise_suppressor train \
     --epochs "${EPOCHS}" \
     --batch_size "${BATCH_SIZE}" \
     --learning_rate "${LR}" \
+    --weight_decay "${WEIGHT_DECAY}" \
     --base_channels "${BASE_CHANNELS}" \
     --validation_ratio "${VALIDATION_RATIO}" \
     --snr_low "${SNR_LOW}" \
     --snr_high "${SNR_HIGH}" \
     --seed "${SEED}" \
     --num_workers "${NUM_WORKERS}" \
-    --checkpoint_path "${CHECKPOINT_PATH}"
+    --checkpoint_path "${CHECKPOINT_PATH}" \
+    "${TRAIN_EXTRA_ARGS[@]}"
 
 # 6. Evaluate trained weights on validation split
 echo "[5/6] Avaliando pesos treinados no split de validação..."

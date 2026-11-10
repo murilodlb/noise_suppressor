@@ -6,7 +6,8 @@ import torch.nn as nn
 from src.benchmark import count_macs, count_parameters
 from src.cli import main as cli_main
 from src.inference import enhance_signal, load_model
-from src.model import DSTinyUNet, TinyUNet, build_model, list_available_models
+from src.model import DSTinyUNet, ResTinyUNet, TinyUNet, build_model, list_available_models
+from src.train import _apply_spec_augmentation
 
 INPUT_SHAPE = (1, 1, 257, 126)
 
@@ -98,4 +99,31 @@ def test_cli_benchmark_model_flag_ignores_default_tinyunet_checkpoint(tmp_path, 
     report = json.loads(out_json.read_text(encoding="utf-8"))
     assert report["model_name"] == "ds_tinyunet"
     assert report["base_channels"] == 16
+
+
+def test_res_tinyunet_registration_and_forward_pass():
+    assert "res_tinyunet" in list_available_models()
+    model = build_model("res_tinyunet", in_channels=1, base_channels=8).eval()
+    assert isinstance(model, ResTinyUNet)
+
+    with torch.no_grad():
+        output = model(torch.randn(INPUT_SHAPE))
+    assert output.shape == INPUT_SHAPE
+    assert float(output.min()) >= 0.0 and float(output.max()) <= 1.0
+
+    params = count_parameters(model)["total_parameters"]
+    macs = count_macs(model, INPUT_SHAPE)["total_macs"]
+    assert params > 0
+    assert macs > 0
+
+
+def test_apply_spec_augmentation_preserves_shape_and_finiteness():
+    torch.manual_seed(42)
+    noisy_mag = torch.randn(2, 1, 257, 126)
+    irm = torch.rand(2, 1, 257, 126)
+    augmented = _apply_spec_augmentation(noisy_mag, irm)
+    assert augmented.shape == noisy_mag.shape
+    assert torch.all(torch.isfinite(augmented))
+    assert not torch.allclose(augmented, noisy_mag)
+
 

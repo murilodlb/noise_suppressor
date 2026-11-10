@@ -85,15 +85,12 @@ class TinyUNet(nn.Module):
         cat1 = torch.cat((u1, c1_cropped), dim=1)
         c5 = self.dec1(cat1)
         
-        # Saída entre 0 e 1
-        out = self.sigmoid(self.out_conv(c5))
-        
-        # --- CORREÇÃO AQUI ---
-        # Força a saída a ter exatamente as mesmas dimensões espaciais (H, W) da entrada x.
-        # Isso resolve o mismatch de pixels perdidos nas bordas durante as convoluções.
-        if out.shape[2:] != x.shape[2:]:
-            out = F.interpolate(out, size=x.shape[2:], mode='bilinear', align_corners=False)
+        # Alinha o mapa de atributos antes da projeção final 1x1 e Sigmoid
+        # para evitar suavização bilinear (blur) das bordas harmônicas na máscara.
+        if c5.shape[2:] != x.shape[2:]:
+            c5 = F.interpolate(c5, size=x.shape[2:], mode='bilinear', align_corners=False)
             
+        out = self.sigmoid(self.out_conv(c5))
         return out
 
 
@@ -163,15 +160,124 @@ class DSTinyUNet(nn.Module):
         u1 = self.upconv1(c4)
         c5 = self.dec1(torch.cat((u1, center_crop(c1, u1)), dim=1))
 
+        if c5.shape[2:] != x.shape[2:]:
+            c5 = F.interpolate(c5, size=x.shape[2:], mode="bilinear", align_corners=False)
         out = self.sigmoid(self.out_conv(c5))
-        if out.shape[2:] != x.shape[2:]:
-            out = F.interpolate(out, size=x.shape[2:], mode="bilinear", align_corners=False)
+        return out
+
+
+class SEBlock(nn.Module):
+    """Bloco Squeeze-and-Excitation leve para atenção por canal."""
+    def __init__(self, channels: int, reduction: int = 4):
+        super().__init__()
+        mid_channels = max(2, channels // reduction)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(channels, mid_channels, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        scale = self.fc(self.pool(x))
+        return x * scale
+
+
+class ResDoubleConv(nn.Module):
+    """Bloco convolucional duplo com conexão residual, atenção SE e suporte a dilatação."""
+    def __init__(self, in_channels: int, out_channels: int, dilation: int = 1):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=3,
+                padding=dilation,
+                dilation=dilation,
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_channels),
+        )
+        self.se = SEBlock(out_channels)
+        if in_channels != out_channels:
+            self.shortcut: nn.Module = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+            )
+        else:
+            self.shortcut = nn.Identity()
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.shortcut(x)
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.se(out)
+        return self.act(out + residual)
+
+
+class ResTinyUNet(nn.Module):
+    """
+    U-Net residual com codificação posicional de frequência (CoordConv),
+    atenção por canal (SE) e bottleneck dilatado para maior campo receptivo T-F.
+    """
+    def __init__(self, in_channels: int = 1, base_channels: int = 8):
+        super().__init__()
+        self.in_channels = in_channels
+        self.base_channels = base_channels
+
+        # Entrada recebe canal extra de coordenada de frequência normalizada [0, 1]
+        self.enc1 = ResDoubleConv(in_channels + 1, base_channels)
+        self.enc2 = ResDoubleConv(base_channels, base_channels * 2)
+        self.pool = nn.MaxPool2d(2)
+
+        # Bottleneck com convolução dilatada (dilation=2) para dobrar o campo receptivo
+        self.bottleneck = ResDoubleConv(base_channels * 2, base_channels * 4, dilation=2)
+
+        self.upconv2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
+        self.dec2 = ResDoubleConv(base_channels * 4, base_channels * 2)
+
+        self.upconv1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
+        self.dec1 = ResDoubleConv(base_channels * 2, base_channels)
+
+        self.out_conv = nn.Conv2d(base_channels, in_channels, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
+
+    @staticmethod
+    def _append_freq_coord(x: torch.Tensor) -> torch.Tensor:
+        batch_size, _, freq_bins, time_frames = x.shape
+        freq_coord = torch.linspace(0.0, 1.0, steps=freq_bins, device=x.device, dtype=x.dtype)
+        freq_map = freq_coord.view(1, 1, freq_bins, 1).expand(batch_size, 1, freq_bins, time_frames)
+        return torch.cat((x, freq_map), dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_coord = self._append_freq_coord(x)
+        c1 = self.enc1(x_coord)
+        c2 = self.enc2(self.pool(c1))
+        c3 = self.bottleneck(self.pool(c2))
+
+        u2 = self.upconv2(c3)
+        c4 = self.dec2(torch.cat((u2, center_crop(c2, u2)), dim=1))
+
+        u1 = self.upconv1(c4)
+        c5 = self.dec1(torch.cat((u1, center_crop(c1, u1)), dim=1))
+
+        if c5.shape[2:] != x.shape[2:]:
+            c5 = F.interpolate(c5, size=x.shape[2:], mode="bilinear", align_corners=False)
+        out = self.sigmoid(self.out_conv(c5))
         return out
 
 
 MODEL_REGISTRY: Dict[str, Type[nn.Module]] = {
     "tinyunet": TinyUNet,
     "ds_tinyunet": DSTinyUNet,
+    "res_tinyunet": ResTinyUNet,
 }
 
 

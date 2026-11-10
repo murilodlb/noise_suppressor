@@ -5,10 +5,8 @@ from typing import List, Optional
 
 import soundfile as sf
 
-from .dsp_utils import compute_stft
 from .inference import enhance_signal, load_audio_file, load_model
 from .losses import list_available_losses
-from .metrics import compute_signal_metrics
 from .model import list_available_models
 
 
@@ -18,6 +16,17 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Non-stationary noise suppression CLI for training, inference, evaluation, and benchmarking.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommand to execute")
+
+    # 0. Augment Noise Bank
+    p_aug = subparsers.add_parser(
+        "augment_noise",
+        help="Synthesize non-stationary noise files by concatenating, slicing, and merging base noise clips",
+    )
+    p_aug.add_argument("--noise_dir", type=str, default="data/noise", help="Directory with base noise audio samples")
+    p_aug.add_argument("--output_dir", type=str, default=None, help="Optional output directory (defaults to noise_dir)")
+    p_aug.add_argument("--num_files", type=int, default=90, help="Number of synthetic noise files to generate")
+    p_aug.add_argument("--duration", type=float, default=10.0, help="Duration in seconds of each generated noise file")
+    p_aug.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     # 1. Preprocess
     p_prep = subparsers.add_parser("preprocess", help="Precompute STFT magnitudes and IRM masks to disk (.pt)")
@@ -54,6 +63,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--num_workers", type=int, default=0, help="PyTorch DataLoader worker count")
     p_train.add_argument("--snr_low", type=float, default=-5.0, help="Lower SNR bound (dB) for online mixing")
     p_train.add_argument("--snr_high", type=float, default=15.0, help="Upper SNR bound (dB) for online mixing")
+    p_train.add_argument("--augment_spec", action="store_true", help="Enable on-the-fly spectrogram perturbation during training")
+    p_train.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
     p_train.add_argument("--device", type=str, default="auto", help="Device (auto, cpu, cuda, cuda:0)")
 
     # 3. Infer
@@ -149,7 +160,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "preprocess":
+    if args.command == "augment_noise":
+        from .noise_augmenter import augment_noise_bank
+        augment_noise_bank(
+            noise_dir=args.noise_dir,
+            output_dir=args.output_dir,
+            num_files=args.num_files,
+            duration_seconds=args.duration,
+            seed=args.seed,
+        )
+    elif args.command == "preprocess":
         from .preprocess_dataset import run_preprocess
         run_preprocess(
             clean_dir=args.clean_dir,
@@ -177,6 +197,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             loss_name=args.loss,
             scheduler_patience=args.scheduler_patience,
             scheduler_type=args.scheduler,
+            augment_spec=args.augment_spec,
+            weight_decay=args.weight_decay,
         )
     elif args.command == "infer":
         run_infer(

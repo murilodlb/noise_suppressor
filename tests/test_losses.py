@@ -3,6 +3,7 @@ import torch
 
 from src.inference import load_model
 from src.losses import (
+    AsymmetricPerceptualMaskLoss,
     BCEL1HybridLoss,
     BCEMaskLoss,
     L1MaskLoss,
@@ -15,7 +16,7 @@ from src.model import build_model
 
 
 def test_list_available_losses():
-    assert list_available_losses() == ["bce", "mse", "l1", "bce_l1", "mag_mse"]
+    assert list_available_losses() == ["bce", "mse", "l1", "bce_l1", "mag_mse", "asym_mag_mse"]
 
 
 @pytest.mark.parametrize("loss_name", list_available_losses())
@@ -100,3 +101,19 @@ def test_load_model_extracts_loss_name(tmp_path):
     )
     _, dsp_config = load_model(ckpt_path, device=torch.device("cpu"))
     assert dsp_config["loss_name"] == "mag_mse"
+
+
+def test_asym_mag_mse_penalizes_speech_underestimation_more_than_overestimation():
+    criterion = AsymmetricPerceptualMaskLoss(recall_weight=0.6, l1_weight=0.2)
+    target_irm = torch.full((1, 1, 8, 8), 0.8)
+    noisy_mag = torch.ones((1, 1, 8, 8))
+
+    # Sub-estimação da máscara em 0.2 (pred=0.6 < target=0.8)
+    pred_under = torch.full((1, 1, 8, 8), 0.6)
+    # Sobre-estimação simétrica em 0.2 (pred=1.0 > target=0.8)
+    pred_over = torch.full((1, 1, 8, 8), 1.0)
+
+    loss_under = criterion(pred_under, target_irm, noisy_mag)
+    loss_over = criterion(pred_over, target_irm, noisy_mag)
+    assert float(loss_under) > float(loss_over)
+

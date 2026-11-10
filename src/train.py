@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, Subset, random_split
 
 try:
@@ -81,6 +80,44 @@ def _resolve_device(device: str) -> torch.device:
     return torch.device(device)
 
 
+def _apply_spec_augmentation(noisy_mag: torch.Tensor, irm: torch.Tensor) -> torch.Tensor:
+    """
+    Aplica perturbações leves on-the-fly no espectrograma de entrada durante o treino:
+      1. Variação aleatória de contraste/ganho e offset Z-score.
+      2. Inclinação espectral suave (spectral tilt) ao longo do eixo de frequência.
+      3. Micro-mascaramento T-F (SpecAugment) restrito às regiões dominadas por ruído (irm < 0.2),
+         preservando a consistência exata com o gabarito IRM.
+    """
+    batch_size, _, freq_bins, time_frames = noisy_mag.shape
+    device = noisy_mag.device
+    dtype = noisy_mag.dtype
+
+    scale = torch.empty((batch_size, 1, 1, 1), device=device, dtype=dtype).uniform_(0.90, 1.10)
+    shift = torch.empty((batch_size, 1, 1, 1), device=device, dtype=dtype).uniform_(-0.15, 0.15)
+    slope = torch.empty((batch_size, 1, 1, 1), device=device, dtype=dtype).uniform_(-0.15, 0.15)
+    freq_axis = torch.linspace(-1.0, 1.0, steps=freq_bins, device=device, dtype=dtype).view(
+        1, 1, freq_bins, 1
+    )
+
+    augmented = noisy_mag * scale + shift + slope * freq_axis
+
+    if freq_bins > 16 and time_frames > 12:
+        f_width = int(torch.randint(4, 13, (1,)).item())
+        f_start = int(torch.randint(0, freq_bins - f_width, (1,)).item())
+        t_width = int(torch.randint(3, 9, (1,)).item())
+        t_start = int(torch.randint(0, time_frames - t_width, (1,)).item())
+
+        patch_mask = torch.zeros_like(augmented)
+        patch_mask[:, :, f_start : f_start + f_width, :] = 1.0
+        patch_mask[:, :, :, t_start : t_start + t_width] = 1.0
+
+        noise_only_mask = (irm < 0.2).to(dtype) * patch_mask
+        floor_val = augmented.amin(dim=(-2, -1), keepdim=True)
+        augmented = augmented * (1.0 - 0.5 * noise_only_mask) + (0.5 * floor_val) * noise_only_mask
+
+    return augmented
+
+
 def train(
     epochs: int = 20,
     batch_size: int = 4,
@@ -88,7 +125,7 @@ def train(
     validation_ratio: float = 0.2,
     seed: int = 42,
     data_root: Path = Path("data"),
-    checkpoint_path: Optional[Path] = None,
+    checkpoint_path: Optional[Path] | None = None,
     base_channels: int = 8,
     num_workers: int = 0,
     snr_range: tuple[float, float] = (-5.0, 15.0),
@@ -97,6 +134,8 @@ def train(
     loss_name: str = "bce",
     scheduler_patience: int = 5,
     scheduler_type: str = "plateau",
+    augment_spec: bool = False,
+    weight_decay: float = 1e-4,
 ) -> Path:
     torch.manual_seed(seed)
     random.seed(seed)
@@ -215,15 +254,39 @@ def train(
     print(
         f"[i] Modelo: {normalized_model_name} (ch={base_channels}) | "
         f"Função de perda: {normalized_loss_name} | "
-        f"scheduler={normalized_scheduler} (patience={scheduler_patience})"
+        f"scheduler={normalized_scheduler} (patience={scheduler_patience}) | "
+        f"augment_spec={augment_spec} | weight_decay={weight_decay}"
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
     if normalized_scheduler == "cosine":
-        scheduler: torch.optim.lr_scheduler.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=max(1, epochs),
-            eta_min=1e-6,
-        )
+        warmup_epochs = min(5, max(1, epochs // 5)) if epochs > 5 else 0
+        if warmup_epochs > 0:
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=0.2,
+                end_factor=1.0,
+                total_iters=warmup_epochs,
+            )
+            cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, epochs - warmup_epochs),
+                eta_min=1e-6,
+            )
+            scheduler: torch.optim.lr_scheduler.LRScheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[warmup_epochs],
+            )
+        else:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, epochs),
+                eta_min=1e-6,
+            )
     else:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
@@ -243,9 +306,10 @@ def train(
         for batch_index, (noisy_mag, irm) in enumerate(train_loader, start=1):
             noisy_mag = noisy_mag.to(resolved_device, non_blocking=use_cuda)
             irm = irm.to(resolved_device, non_blocking=use_cuda)
+            model_input = _apply_spec_augmentation(noisy_mag, irm) if augment_spec else noisy_mag
 
             optimizer.zero_grad(set_to_none=True)
-            predicted_mask = model(noisy_mag)
+            predicted_mask = model(model_input)
             loss = criterion(predicted_mask, irm, noisy_mag)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -263,6 +327,7 @@ def train(
 
         model.eval()
         validation_loss_sum = 0.0
+        validation_mae_sum = 0.0
         validation_batches = len(validation_loader)
         with torch.no_grad():
             for batch_index, (noisy_mag, irm) in enumerate(validation_loader, start=1):
@@ -270,18 +335,21 @@ def train(
                 irm = irm.to(resolved_device, non_blocking=use_cuda)
                 predicted_mask = model(noisy_mag)
                 loss = criterion(predicted_mask, irm, noisy_mag)
+                batch_mae = torch.mean(torch.abs(predicted_mask - irm)).item()
                 validation_loss_sum += loss.item() * noisy_mag.size(0)
+                validation_mae_sum += batch_mae * noisy_mag.size(0)
                 _print_progress_bar(
                     batch_index,
                     validation_batches,
-                    prefix=f"Epoch {epoch:02d}/{epochs} [val ]",
-                    suffix=f"loss={loss.item():.4f}",
+                    prefix=f"Epoch {epoch:02d}/{epochs} [val  ]",
+                    suffix=f"loss={loss.item():.4f} mae={batch_mae:.4f}",
                 )
 
         print()
 
         mean_train_loss = train_loss_sum / len(train_loader.dataset)
         mean_validation_loss = validation_loss_sum / len(validation_loader.dataset)
+        mean_validation_mae = validation_mae_sum / len(validation_loader.dataset)
         if normalized_scheduler == "cosine":
             scheduler.step()
         else:
@@ -289,7 +357,8 @@ def train(
         current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:02d}/{epochs} | train_loss={mean_train_loss:.4f} | "
-            f"val_loss={mean_validation_loss:.4f} | lr={current_lr:.6f}"
+            f"val_loss={mean_validation_loss:.4f} | val_mae={mean_validation_mae:.4f} | "
+            f"lr={current_lr:.6f}"
         )
 
         if mean_validation_loss < best_validation_loss:
@@ -300,11 +369,14 @@ def train(
                     "loss_name": normalized_loss_name,
                     "scheduler_type": normalized_scheduler,
                     "scheduler_patience": scheduler_patience,
+                    "augment_spec": augment_spec,
+                    "weight_decay": weight_decay,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
                     "epoch": epoch,
                     "validation_loss": mean_validation_loss,
+                    "validation_mae": mean_validation_mae,
                     "sr": sr,
                     "n_fft": n_fft,
                     "hop_length": hop_length,
@@ -325,6 +397,8 @@ if __name__ == "__main__":
     parser.add_argument("--loss", type=str, default="bce", choices=list_available_losses(), help="Função de perda.")
     parser.add_argument("--scheduler", type=str, default="plateau", choices=["plateau", "cosine"], help="Tipo de agendador de LR.")
     parser.add_argument("--scheduler_patience", type=int, default=5, help="Paciência do ReduceLROnPlateau.")
+    parser.add_argument("--augment_spec", action="store_true", help="Ativa perturbação on-the-fly do espectrograma no treino.")
+    parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay do AdamW.")
     parser.add_argument("--epochs", type=int, default=20, help="Numero de epocas de treino.")
     parser.add_argument("--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0).")
     args = parser.parse_args()
@@ -335,4 +409,6 @@ if __name__ == "__main__":
         loss_name=args.loss,
         scheduler_patience=args.scheduler_patience,
         scheduler_type=args.scheduler,
+        augment_spec=args.augment_spec,
+        weight_decay=args.weight_decay,
     )
