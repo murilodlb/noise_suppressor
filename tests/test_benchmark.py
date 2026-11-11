@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 
 from src.benchmark import (
     compute_model_size_bytes,
@@ -26,7 +25,7 @@ def test_compute_model_size():
 
 
 def test_count_macs_simple_conv():
-    conv = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=3, padding=1, bias=False)
+    conv = torch.nn.Conv2d(in_channels=1, out_channels=8, kernel_size=3, padding=1, bias=False)
     # Input shape: (1, 1, 10, 10)
     # Output shape: (1, 8, 10, 10)
     # MACs = 1 * 8 * 10 * 10 * 1 * 3 * 3 = 7200

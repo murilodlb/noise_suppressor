@@ -21,13 +21,13 @@ Abaixo, a validação visual do fluxo de supressão aplicando a máscara sobre o
 
 Comparação entre o sinal original limpo, o sinal corrompido por ruído e o sinal reconstruído após a filtragem espacial pela rede.
 
-![Sinais no Domínio do Tempo](data/imgs/time_domain.png)
+![Sinais no Domínio do Tempo](data/imgs/time_domain-res-tinyunet.png)
 
 ### Domínio da Frequência
 
 Comparação das matrizes de magnitude em escala de Decibéis (dB). Nota-se a atenuação do ruído de fundo (áreas escuras) no espectrograma filtrado, preservando a estrutura harmônica da voz.
 
-![Espectrogramas](data/imgs/spectrograms.png)
+![Espectrogramas](data/imgs/spectrograms-res-tinyunet.png)
 
 ## Arquitetura do Projeto
 

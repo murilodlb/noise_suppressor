@@ -73,7 +73,9 @@ def test_add_noise_samples_from_snr_range(tmp_path):
     dataset = NoiseSuppressionDataset(str(tmp_path), str(tmp_path), snr_range=(3.0, 3.0))
     rng = np.random.default_rng(4)
     clean = _make_clean()
-    noisy, scaled_noise, snr_db = dataset._add_noise(clean, rng.standard_normal(32000).astype(np.float32))
+    noisy, scaled_noise, snr_db = dataset._add_noise(
+        clean, rng.standard_normal(32000).astype(np.float32)
+    )
     assert snr_db == 3.0
     assert abs(compute_snr(clean, noisy) - 3.0) < 1e-3
 
@@ -85,6 +87,7 @@ def test_plot_spectrograms_time_axis_matches_duration(tmp_path):
 
     def fake_savefig(*args, **kwargs):
         import matplotlib.pyplot as plt
+
         captured["xlim"] = plt.gcf().axes[0].get_xlim()
 
     with mock.patch("src.dsp_utils.plt.savefig", side_effect=fake_savefig):
@@ -96,13 +99,32 @@ def test_plot_spectrograms_time_axis_matches_duration(tmp_path):
 
 def test_precomputed_dataset_follows_metadata_order(tmp_path):
     for name, value in [("b", 1.0), ("a", 2.0), ("stale", 9.0)]:
-        torch.save({"noisy_mag": torch.full((1, 2, 2), value), "irm": torch.zeros(1, 2, 2)}, tmp_path / f"{name}.pt")
+        torch.save(
+            {"noisy_mag": torch.full((1, 2, 2), value), "irm": torch.zeros(1, 2, 2)},
+            tmp_path / f"{name}.pt",
+        )
 
     with (tmp_path / "metadata.csv").open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["sample_file", "clean_file", "noise_file", "sample_index"])
+        writer = csv.DictWriter(
+            f, fieldnames=["sample_file", "clean_file", "noise_file", "sample_index"]
+        )
         writer.writeheader()
-        writer.writerow({"sample_file": str(tmp_path / "b.pt"), "clean_file": "c1", "noise_file": "n", "sample_index": 0})
-        writer.writerow({"sample_file": str(tmp_path / "a.pt"), "clean_file": "c2", "noise_file": "n", "sample_index": 0})
+        writer.writerow(
+            {
+                "sample_file": str(tmp_path / "b.pt"),
+                "clean_file": "c1",
+                "noise_file": "n",
+                "sample_index": 0,
+            }
+        )
+        writer.writerow(
+            {
+                "sample_file": str(tmp_path / "a.pt"),
+                "clean_file": "c2",
+                "noise_file": "n",
+                "sample_index": 0,
+            }
+        )
 
     dataset = PrecomputedNoiseSuppressionDataset(str(tmp_path))
     assert len(dataset) == 2  # arquivo órfão ignorado
@@ -162,7 +184,11 @@ def test_export_precomputed_dataset_skips_silent_clean_files(tmp_path):
 
     sf.write(clean_dir / "valid.wav", _make_clean(32000), SR)
     sf.write(clean_dir / "silent.wav", np.zeros(32000, dtype=np.float32), SR)
-    sf.write(noise_dir / "noise.wav", (0.1 * np.random.default_rng(0).standard_normal(32000)).astype(np.float32), SR)
+    sf.write(
+        noise_dir / "noise.wav",
+        (0.1 * np.random.default_rng(0).standard_normal(32000)).astype(np.float32),
+        SR,
+    )
 
     meta_path = PrecomputedNoiseSuppressionDataset.export_precomputed_dataset(
         clean_dir=str(clean_dir),
@@ -173,5 +199,3 @@ def test_export_precomputed_dataset_skips_silent_clean_files(tmp_path):
     dataset = PrecomputedNoiseSuppressionDataset(str(out_dir))
     assert meta_path.exists()
     assert len(dataset) == 1
-
-

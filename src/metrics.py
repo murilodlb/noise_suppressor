@@ -1,5 +1,4 @@
 import warnings
-from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -20,8 +19,8 @@ def compute_snr(reference: np.ndarray, estimate: np.ndarray, eps: float = 1e-8) 
     ref = reference[:min_len].astype(np.float64)
     est = estimate[:min_len].astype(np.float64)
     noise = ref - est
-    ref_energy = np.sum(ref ** 2)
-    noise_energy = np.sum(noise ** 2)
+    ref_energy = np.sum(ref**2)
+    noise_energy = np.sum(noise**2)
     return float(10.0 * np.log10((ref_energy + eps) / (noise_energy + eps)))
 
 
@@ -41,7 +40,7 @@ def compute_si_sdr(reference: np.ndarray, estimate: np.ndarray, eps: float = 1e-
     ref = ref - np.mean(ref)
     est = est - np.mean(est)
 
-    ref_energy = np.sum(ref ** 2)
+    ref_energy = np.sum(ref**2)
     if ref_energy <= eps:
         return float("-inf")
 
@@ -50,8 +49,8 @@ def compute_si_sdr(reference: np.ndarray, estimate: np.ndarray, eps: float = 1e-
     s_target = alpha * ref
     e_noise = est - s_target
 
-    target_energy = np.sum(s_target ** 2)
-    noise_energy = np.sum(e_noise ** 2)
+    target_energy = np.sum(s_target**2)
+    noise_energy = np.sum(e_noise**2)
 
     if noise_energy <= eps:
         return 100.0  # Perfect reconstruction
@@ -89,8 +88,8 @@ def compute_segmental_snr(
         frame_est = est[start:end]
         frame_noise = frame_ref - frame_est
 
-        ref_power = np.sum(frame_ref ** 2)
-        noise_power = np.sum(frame_noise ** 2)
+        ref_power = np.sum(frame_ref**2)
+        noise_power = np.sum(frame_noise**2)
 
         if ref_power > eps:
             snr_frame = 10.0 * np.log10(ref_power / (noise_power + eps))
@@ -119,6 +118,7 @@ def compute_pesq(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000) -
     try:
         if sr != 16000:
             import librosa
+
             ref = librosa.resample(ref, orig_sr=sr, target_sr=16000)
             est = librosa.resample(est, orig_sr=sr, target_sr=16000)
             sr = 16000
@@ -128,7 +128,9 @@ def compute_pesq(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000) -
         return float("nan")
 
 
-def compute_stoi(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000, extended: bool = False) -> float:
+def compute_stoi(
+    reference: np.ndarray, estimate: np.ndarray, sr: int = 16000, extended: bool = False
+) -> float:
     """Computes STOI or extended STOI (ESTOI). Returns float('nan') on error, insufficient active frames, or missing dependency."""
     if pystoi is None:
         return float("nan")
@@ -145,7 +147,9 @@ def compute_stoi(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000, e
             warnings.simplefilter("always", RuntimeWarning)
             score = float(pystoi.stoi(ref, est, sr, extended=extended))
             for w in caught_warnings:
-                if issubclass(w.category, RuntimeWarning) and "Not enough STFT frames" in str(w.message):
+                if issubclass(w.category, RuntimeWarning) and "Not enough STFT frames" in str(
+                    w.message
+                ):
                     return float("nan")
         if abs(score - 1e-5) < 1e-9:
             return float("nan")
@@ -168,7 +172,7 @@ def compute_mask_classification_metrics(
     ideal_mask: np.ndarray,
     threshold: float = 0.70710678,
     eps: float = 1e-8,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Computes Precision, Recall, F1, Accuracy, and HIT - FA
     by binarizing predicted and ideal masks at the specified threshold.
@@ -204,7 +208,7 @@ def compute_mask_classification_metrics(
 def compute_mask_regression_metrics(
     predicted_mask: np.ndarray,
     ideal_mask: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Computes MSE and MAE between predicted mask and target continuous IRM."""
     mse = float(np.mean((predicted_mask - ideal_mask) ** 2))
     mae = float(np.mean(np.abs(predicted_mask - ideal_mask)))
@@ -216,7 +220,7 @@ def compute_attenuation_metrics(
     noise_mag: np.ndarray,
     mask: np.ndarray,
     eps: float = 1e-8,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Computes Speech Attenuation (SA) and Noise Attenuation (NA) in dB.
     - Speech Attenuation: 10 * log10(||S||^2 / ||M * S||^2), lower is better (less speech loss).
@@ -224,11 +228,15 @@ def compute_attenuation_metrics(
     """
     clean_energy = float(np.sum(np.square(clean_mag)))
     retained_speech_energy = float(np.sum(np.square(mask * clean_mag)))
-    speech_attenuation_db = float(10.0 * np.log10((clean_energy + eps) / (retained_speech_energy + eps)))
+    speech_attenuation_db = float(
+        10.0 * np.log10((clean_energy + eps) / (retained_speech_energy + eps))
+    )
 
     noise_energy = float(np.sum(np.square(noise_mag)))
     passed_noise_energy = float(np.sum(np.square(mask * noise_mag)))
-    noise_attenuation_db = float(10.0 * np.log10((noise_energy + eps) / (passed_noise_energy + eps)))
+    noise_attenuation_db = float(
+        10.0 * np.log10((noise_energy + eps) / (passed_noise_energy + eps))
+    )
 
     return {
         "speech_attenuation_db": speech_attenuation_db,
@@ -240,7 +248,7 @@ def compute_signal_metrics(
     reference: np.ndarray,
     estimate: np.ndarray,
     sr: int = 16000,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Computes all time-domain and perceptual signal quality metrics."""
     return {
         "si_sdr": compute_si_sdr(reference, estimate),

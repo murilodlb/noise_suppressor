@@ -2,7 +2,6 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
-import torch
 
 from src.inference import (
     enhance_signal,
@@ -55,4 +54,3 @@ def test_load_webm_without_system_ffmpeg():
             audio = load_audio_file(sample_webm, sr=16000)
             assert audio.dtype == np.float32
             assert len(audio) > 16000
-

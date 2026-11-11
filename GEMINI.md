@@ -26,5 +26,8 @@ O projeto consiste em um sistema de supressão de áudio não-estacionário que 
 ## Regras
 
 * Todas as variáveis, funções, classes, tudo deve ser escrito em inglês usando snake case.
+* Utilizar a referência direta completa `torch.nn` (ex.: `torch.nn.Module`, `torch.nn.Conv2d`, `torch.nn.Sequential`, `torch.nn.functional`) em vez de aliases como `import torch.nn as nn` ou `from torch import nn`.
+* O código deve seguir estritamente a validação de lint e formatação do `ruff` e checagem de tipos estática do `pyright`.
+
 
 

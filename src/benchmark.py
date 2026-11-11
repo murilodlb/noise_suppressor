@@ -1,19 +1,17 @@
 import json
-import os
 import platform
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
 from .inference import load_model
 
 
-def count_parameters(model: nn.Module) -> Dict[str, int]:
+def count_parameters(model: torch.nn.Module) -> dict[str, int]:
     """Counts total and trainable parameters in the model."""
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -25,7 +23,7 @@ def count_parameters(model: nn.Module) -> Dict[str, int]:
     }
 
 
-def compute_model_size_bytes(model: nn.Module) -> Dict[str, Any]:
+def compute_model_size_bytes(model: torch.nn.Module) -> dict[str, Any]:
     """Computes actual float32 footprint and estimated int8 quantized footprint."""
     param_numel = sum(p.numel() for p in model.parameters())
     buffer_numel = sum(b.numel() for b in model.buffers())
@@ -43,7 +41,7 @@ def compute_model_size_bytes(model: nn.Module) -> Dict[str, Any]:
     }
 
 
-def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]:
+def count_macs(model: torch.nn.Module, input_shape: tuple[int, ...]) -> dict[str, Any]:
     """
     Computes Multiply-Accumulate operations (MACs) for the network using forward hooks.
     Counts Conv2d, ConvTranspose2d, BatchNorm2d, and Linear.
@@ -52,7 +50,7 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
     handles = []
 
     def conv2d_hook(name: str):
-        def hook(layer: nn.Conv2d, inputs, outputs):
+        def hook(layer: torch.nn.Conv2d, inputs, outputs):
             # Output shape: (B, C_out, H_out, W_out)
             output = outputs
             b, c_out, h_out, w_out = output.shape
@@ -60,10 +58,11 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
             c_in = layer.in_channels // layer.groups
             layer_macs = b * c_out * h_out * w_out * c_in * k_h * k_w
             macs_by_layer[name] = layer_macs
+
         return hook
 
     def conv_transpose2d_hook(name: str):
-        def hook(layer: nn.ConvTranspose2d, inputs, outputs):
+        def hook(layer: torch.nn.ConvTranspose2d, inputs, outputs):
             # Input shape: (B, C_in, H_in, W_in)
             inp = inputs[0]
             b, c_in, h_in, w_in = inp.shape
@@ -71,24 +70,27 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
             c_out = layer.out_channels // layer.groups
             layer_macs = b * c_in * c_out * k_h * k_w * h_in * w_in
             macs_by_layer[name] = layer_macs
+
         return hook
 
     def bn2d_hook(name: str):
-        def hook(layer: nn.BatchNorm2d, inputs, outputs):
+        def hook(layer: torch.nn.BatchNorm2d, inputs, outputs):
             # Normalization + affine transformation
             output = outputs
             macs_by_layer[name] = int(output.numel())
+
         return hook
 
     def linear_hook(name: str):
-        def hook(layer: nn.Linear, inputs, outputs):
+        def hook(layer: torch.nn.Linear, inputs, outputs):
             output = outputs
             num_instances = int(output.numel() // layer.out_features)
             macs_by_layer[name] = num_instances * layer.in_features * layer.out_features
+
         return hook
 
     def rnn_hook(name: str, num_gates: int):
-        def hook(layer: nn.RNNBase, inputs, outputs):
+        def hook(layer: torch.nn.modules.rnn.RNNBase, inputs, outputs):
             inp = inputs[0]
             if layer.batch_first:
                 batch_size, seq_len, _ = inp.shape
@@ -102,20 +104,21 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
                 step_macs = num_gates * (in_sz * hidden_size + hidden_size * hidden_size)
                 total_layer_macs += batch_size * seq_len * num_directions * step_macs
             macs_by_layer[name] = int(total_layer_macs)
+
         return hook
 
     for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d):
+        if isinstance(module, torch.nn.Conv2d):
             handles.append(module.register_forward_hook(conv2d_hook(name)))
-        elif isinstance(module, nn.ConvTranspose2d):
+        elif isinstance(module, torch.nn.ConvTranspose2d):
             handles.append(module.register_forward_hook(conv_transpose2d_hook(name)))
-        elif isinstance(module, nn.BatchNorm2d):
+        elif isinstance(module, torch.nn.BatchNorm2d):
             handles.append(module.register_forward_hook(bn2d_hook(name)))
-        elif isinstance(module, nn.Linear):
+        elif isinstance(module, torch.nn.Linear):
             handles.append(module.register_forward_hook(linear_hook(name)))
-        elif isinstance(module, nn.GRU):
+        elif isinstance(module, torch.nn.GRU):
             handles.append(module.register_forward_hook(rnn_hook(name, num_gates=3)))
-        elif isinstance(module, nn.LSTM):
+        elif isinstance(module, torch.nn.LSTM):
             handles.append(module.register_forward_hook(rnn_hook(name, num_gates=4)))
 
     device = next(model.parameters()).device
@@ -136,7 +139,9 @@ def count_macs(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]
     }
 
 
-def estimate_activation_memory(model: nn.Module, input_shape: Tuple[int, ...]) -> Dict[str, Any]:
+def estimate_activation_memory(
+    model: torch.nn.Module, input_shape: tuple[int, ...]
+) -> dict[str, Any]:
     """Measures the cumulative peak activation tensor memory during a forward pass."""
     total_elements = 0
     handles = []
@@ -174,14 +179,14 @@ def estimate_activation_memory(model: nn.Module, input_shape: Tuple[int, ...]) -
 
 
 def time_pipeline_stages(
-    model: nn.Module,
+    model: torch.nn.Module,
     signal: np.ndarray,
     n_fft: int = 512,
     hop_length: int = 256,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
     warmup: int = 5,
     repeats: int = 50,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Benchmarks latency for each stage: STFT, Preprocessing, Model forward, Masking + iSTFT, and Total."""
     if device is None:
         device = next(model.parameters()).device
@@ -219,7 +224,7 @@ def time_pipeline_stages(
         t_start = time.perf_counter()
         with torch.no_grad():
             mask = model(t)
-        if device.type == "cuda":
+        if device is not None and device.type == "cuda":
             torch.cuda.synchronize()
         t_fwd = time.perf_counter() - t_start
 
@@ -257,19 +262,19 @@ def time_pipeline_stages(
 
 
 def run_benchmark(
-    checkpoint_path: Optional[str | Path] = None,
+    checkpoint_path: str | Path | None = None,
     seconds: float = 2.0,
     sr: int = 16000,
     n_fft: int = 512,
     hop_length: int = 256,
     warmup: int = 5,
     repeats: int = 50,
-    num_threads: Optional[int] = None,
+    num_threads: int | None = None,
     device: str = "cpu",
-    output_path: Optional[str | Path] = None,
-    model_name: Optional[str] = None,
+    output_path: str | Path | None = None,
+    model_name: str | None = None,
     base_channels: int = 8,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Runs a full computational overhead benchmark and exports results."""
     if num_threads is not None and num_threads > 0:
         torch.set_num_threads(num_threads)

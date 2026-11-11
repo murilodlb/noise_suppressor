@@ -3,14 +3,12 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
-import librosa
 import numpy as np
 import soundfile as sf
 import soxr
 import torch
-import torch.nn as nn
 
 from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
 from .model import build_model
@@ -75,11 +73,11 @@ def load_audio_file(file_path: str | Path, sr: int = 16000) -> np.ndarray:
 
 
 def load_model(
-    checkpoint_path: Optional[str | Path] = None,
-    device: Optional[torch.device] = None,
-    model_name: Optional[str] = None,
+    checkpoint_path: str | Path | None = None,
+    device: torch.device | None = None,
+    model_name: str | None = None,
     base_channels: int = 8,
-) -> Tuple[nn.Module, Dict[str, Any]]:
+) -> tuple[torch.nn.Module, dict[str, Any]]:
     """
     Loads a registered model from a checkpoint, returning the model and its DSP/architecture metadata.
     If checkpoint_path is None or doesn't exist, returns an uninitialized model.
@@ -88,7 +86,7 @@ def load_model(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     resolved_model_name = (model_name or "tinyunet").lower().strip()
-    dsp_config: Dict[str, Any] = {
+    dsp_config: dict[str, Any] = {
         "model_name": resolved_model_name,
         "loss_name": "unknown",
         "epoch": None,
@@ -103,7 +101,9 @@ def load_model(
         if path.exists():
             checkpoint = torch.load(path, map_location=device)
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                resolved_model_name = str(checkpoint.get("model_name", model_name or "tinyunet")).lower().strip()
+                resolved_model_name = (
+                    str(checkpoint.get("model_name", model_name or "tinyunet")).lower().strip()
+                )
                 base_ch = int(checkpoint.get("base_channels", base_channels))
                 dsp_config["model_name"] = resolved_model_name
                 dsp_config["loss_name"] = str(checkpoint.get("loss_name", "bce")).lower().strip()
@@ -138,9 +138,9 @@ def load_model(
 
 
 def predict_mask(
-    model: nn.Module,
+    model: torch.nn.Module,
     noisy_mag: np.ndarray,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
 ) -> np.ndarray:
     """Predicts a 2D ratio mask in [0, 1] from a noisy magnitude spectrogram."""
     if device is None:
@@ -158,11 +158,11 @@ def predict_mask(
 
 
 def enhance_signal(
-    model: nn.Module,
+    model: torch.nn.Module,
     noisy_signal: np.ndarray,
     n_fft: int = 512,
     hop_length: int = 256,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
 ) -> EnhancementResult:
     """Applies STFT, model mask prediction, spectral masking and iSTFT synthesis."""
     noisy_mag, noisy_phase = compute_stft(noisy_signal, n_fft=n_fft, hop_length=hop_length)

@@ -1,6 +1,5 @@
 import pytest
 import torch
-import torch.nn as nn
 
 from src.benchmark import count_macs
 from src.inference import load_model
@@ -61,11 +60,11 @@ def test_load_model_without_checkpoint_uses_requested_model():
 
 
 def test_count_macs_supports_linear_and_gru():
-    class ToySequenceNet(nn.Module):
+    class ToySequenceNet(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.linear = nn.Linear(16, 8)
-            self.gru = nn.GRU(input_size=8, hidden_size=4, num_layers=1, batch_first=True)
+            self.linear = torch.nn.Linear(16, 8)
+            self.gru = torch.nn.GRU(input_size=8, hidden_size=4, num_layers=1, batch_first=True)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # x: (batch=1, seq=5, features=16)

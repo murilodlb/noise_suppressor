@@ -4,7 +4,6 @@ import random
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -53,9 +52,9 @@ def _load_base_noise_file(file_path: Path, sr: int = 16000) -> np.ndarray:
     return np.asarray(audio, dtype=np.float32)
 
 
-def _collect_base_noise_files(noise_dir: Path, prefix_exclude: str = "aug_noise_") -> List[Path]:
+def _collect_base_noise_files(noise_dir: Path, prefix_exclude: str = "aug_noise_") -> list[Path]:
     """Coleta arquivos de ruído originais, ignorando arquivos já sintetizados (aug_noise_*)."""
-    candidates: List[Path] = []
+    candidates: list[Path] = []
     for ext in ("*.wav", "*.webm", "*.mp3", "*.flac", "*.ogg"):
         for path in noise_dir.glob(ext):
             if not path.name.startswith(prefix_exclude):
@@ -63,7 +62,7 @@ def _collect_base_noise_files(noise_dir: Path, prefix_exclude: str = "aug_noise_
     return sorted(candidates)
 
 
-def _crossfade_concat(segments: List[np.ndarray], crossfade_samples: int) -> np.ndarray:
+def _crossfade_concat(segments: list[np.ndarray], crossfade_samples: int) -> np.ndarray:
     """Concatena segmentos 1D usando crossfade suave (Hann) para transições não-estacionárias."""
     if not segments:
         return np.zeros(0, dtype=np.float32)
@@ -95,7 +94,7 @@ def _crossfade_concat(segments: List[np.ndarray], crossfade_samples: int) -> np.
 
 
 def _build_concatenated_track(
-    base_audios: List[np.ndarray],
+    base_audios: list[np.ndarray],
     target_samples: int,
     sr: int,
     rng: random.Random,
@@ -105,7 +104,7 @@ def _build_concatenated_track(
     aplicando reversão temporal ocasional e variação de taxa (pitch/rate shift).
     """
     crossfade_samples = int(0.05 * sr)
-    segments: List[np.ndarray] = []
+    segments: list[np.ndarray] = []
     accumulated_samples = 0
 
     while accumulated_samples < target_samples + crossfade_samples:
@@ -125,7 +124,7 @@ def _build_concatenated_track(
             segment = np.asarray(soxr.resample(segment, sr, warped_sr), dtype=np.float32)
 
         # Normaliza RMS local do segmento para evitar degraus irreais antes do crossfade
-        rms = float(np.sqrt(np.mean(segment ** 2) + 1e-8))
+        rms = float(np.sqrt(np.mean(segment**2) + 1e-8))
         target_seg_rms = rng.uniform(0.08, 0.25)
         segment = segment * (target_seg_rms / rms)
 
@@ -167,7 +166,9 @@ def _apply_spectral_and_envelope_modulation(
     mod_freq_hz = rng.uniform(0.3, 2.0)
     mod_depth = rng.uniform(0.20, 0.65)
     mod_phase = rng.uniform(0.0, 2.0 * math.pi)
-    envelope = 1.0 - mod_depth * 0.5 * (1.0 + np.sin(2.0 * math.pi * mod_freq_hz * time_axis + mod_phase))
+    envelope = 1.0 - mod_depth * 0.5 * (
+        1.0 + np.sin(2.0 * math.pi * mod_freq_hz * time_axis + mod_phase)
+    )
 
     modulated = (tilted * envelope.astype(np.float32)).astype(np.float32)
 
@@ -181,13 +182,13 @@ def _apply_spectral_and_envelope_modulation(
 
 def augment_noise_bank(
     noise_dir: str | Path = "data/noise",
-    output_dir: Optional[str | Path] = None,
+    output_dir: str | Path | None = None,
     num_files: int = 90,
     duration_seconds: float = 10.0,
     sr: int = 16000,
     seed: int = 42,
     clean_existing: bool = True,
-) -> List[Path]:
+) -> list[Path]:
     """
     Expande o banco de ruídos combinando concatenação de fatias, superposição multi-fonte,
     deslocamento espectral e modulação de envoltória a partir dos arquivos originais.
@@ -200,7 +201,7 @@ def augment_noise_bank(
     if not base_files:
         raise ValueError(f"Nenhum arquivo de ruído base encontrado em {noise_path}.")
 
-    base_audios: List[np.ndarray] = []
+    base_audios: list[np.ndarray] = []
     for file_path in base_files:
         audio = _load_base_noise_file(file_path, sr=sr)
         if not is_silent_audio(audio):
@@ -215,7 +216,7 @@ def augment_noise_bank(
 
     rng = random.Random(seed)
     target_samples = max(1, int(round(duration_seconds * sr)))
-    created_files: List[Path] = []
+    created_files: list[Path] = []
 
     print(
         f"[i] Gerando {num_files} arquivos de ruído não-estacionário ({duration_seconds:.1f}s cada) "
@@ -223,11 +224,15 @@ def augment_noise_bank(
     )
 
     for idx in range(1, num_files + 1):
-        track_a = _build_concatenated_track(base_audios, target_samples=target_samples, sr=sr, rng=rng)
+        track_a = _build_concatenated_track(
+            base_audios, target_samples=target_samples, sr=sr, rng=rng
+        )
 
         # Em 75% dos casos, superpõe uma segunda trilha independente em SNR relativa aleatória
         if len(base_audios) >= 2 and rng.random() < 0.75:
-            track_b = _build_concatenated_track(base_audios, target_samples=target_samples, sr=sr, rng=rng)
+            track_b = _build_concatenated_track(
+                base_audios, target_samples=target_samples, sr=sr, rng=rng
+            )
             rel_snr = rng.uniform(-5.0, 5.0)
             merged = _merge_noise_tracks(track_a, track_b, relative_snr_db=rel_snr)
         else:

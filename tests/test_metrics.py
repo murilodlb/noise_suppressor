@@ -1,7 +1,6 @@
 import math
 
 import numpy as np
-import pytest
 
 from src.evaluate import summarize_metric_values
 from src.metrics import (
@@ -9,8 +8,6 @@ from src.metrics import (
     compute_mask_classification_metrics,
     compute_mask_regression_metrics,
     compute_mask_threshold,
-    compute_pesq,
-    compute_segmental_snr,
     compute_si_sdr,
     compute_snr,
     compute_stoi,
@@ -40,8 +37,8 @@ def test_compute_si_sdr_with_known_noise():
     signal = np.sin(2 * np.pi * 440 * t)
     noise = np.random.normal(0, 1.0, len(t))
     # Scale noise to 10 dB SNR
-    sig_power = np.mean(signal ** 2)
-    noise_power = np.mean(noise ** 2)
+    sig_power = np.mean(signal**2)
+    noise_power = np.mean(noise**2)
     target_snr_db = 10.0
     k = math.sqrt(sig_power / (noise_power * (10 ** (target_snr_db / 10.0))))
     noisy = signal + k * noise
@@ -95,7 +92,9 @@ def test_compute_attenuation_metrics():
 def test_pesq_and_stoi_on_speech():
     sr = 16000
     t = np.linspace(0, 1.0, sr)
-    speech_like = (0.5 * np.sin(2 * np.pi * 200 * t) + 0.3 * np.sin(2 * np.pi * 400 * t)).astype(np.float32)
+    speech_like = (0.5 * np.sin(2 * np.pi * 200 * t) + 0.3 * np.sin(2 * np.pi * 400 * t)).astype(
+        np.float32
+    )
     stoi_val = compute_stoi(speech_like, speech_like, sr=sr)
     assert stoi_val > 0.95
 
@@ -122,5 +121,3 @@ def test_summarize_metric_values_ignores_nan_and_inf():
     assert math.isnan(empty_summary["mean"])
     assert math.isnan(empty_summary["std"])
     assert math.isnan(empty_summary["median"])
-
-

@@ -3,7 +3,6 @@ import csv
 import random
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
 
 import torch
 from torch.utils.data import DataLoader, Subset, random_split
@@ -31,7 +30,9 @@ def _print_progress_bar(current: int, total: int, prefix: str, suffix: str = "")
     print(f"\r{prefix} |{bar}| {current}/{total} {suffix}", end="", flush=True)
 
 
-def _split_indices_by_clean_source(metadata_path: Path, validation_ratio: float, seed: int = 42) -> tuple[list[int], list[int]]:
+def _split_indices_by_clean_source(
+    metadata_path: Path, validation_ratio: float, seed: int = 42
+) -> tuple[list[int], list[int]]:
     clean_to_indices: dict[str, list[int]] = defaultdict(list)
 
     with metadata_path.open("r", newline="", encoding="utf-8") as csv_file:
@@ -42,7 +43,9 @@ def _split_indices_by_clean_source(metadata_path: Path, validation_ratio: float,
 
     unique_clean_files = list(clean_to_indices.keys())
     if len(unique_clean_files) < 2:
-        raise ValueError("É preciso ter pelo menos 2 arquivos limpos distintos para fazer split por origem.")
+        raise ValueError(
+            "É preciso ter pelo menos 2 arquivos limpos distintos para fazer split por origem."
+        )
 
     random.Random(seed).shuffle(unique_clean_files)
 
@@ -62,7 +65,9 @@ def _split_indices_by_clean_source(metadata_path: Path, validation_ratio: float,
             train_indices.extend(sample_indices)
 
     if not train_indices or not validation_indices:
-        raise ValueError("O split por origem ficou vazio em treino ou validação. Ajuste validation_ratio.")
+        raise ValueError(
+            "O split por origem ficou vazio em treino ou validação. Ajuste validation_ratio."
+        )
 
     return train_indices, validation_indices
 
@@ -125,7 +130,7 @@ def train(
     validation_ratio: float = 0.2,
     seed: int = 42,
     data_root: Path = Path("data"),
-    checkpoint_path: Optional[Path] | None = None,
+    checkpoint_path: Path | None | None = None,
     base_channels: int = 8,
     num_workers: int = 0,
     snr_range: tuple[float, float] = (-5.0, 15.0),
@@ -195,7 +200,9 @@ def train(
     if use_precomputed_dataset:
         metadata_path = precomputed_dir / "metadata.csv"
         if not metadata_path.exists():
-            raise ValueError(f"{metadata_path} não encontrado. Gere o dataset pré-computado novamente.")
+            raise ValueError(
+                f"{metadata_path} não encontrado. Gere o dataset pré-computado novamente."
+            )
 
         train_indices, validation_indices = _split_indices_by_clean_source(
             metadata_path=metadata_path,
@@ -221,10 +228,16 @@ def train(
     use_cuda = resolved_device.type == "cuda"
     if use_cuda:
         torch.backends.cudnn.benchmark = True
-        gpu_index = resolved_device.index if resolved_device.index is not None else torch.cuda.current_device()
+        gpu_index = (
+            resolved_device.index
+            if resolved_device.index is not None
+            else torch.cuda.current_device()
+        )
         gpu_name = torch.cuda.get_device_name(gpu_index)
-        vram_gb = torch.cuda.get_device_properties(gpu_index).total_memory / (1024 ** 3)
-        print(f"[i] Treinando em GPU CUDA: {gpu_name} ({vram_gb:.1f} GB VRAM) | device={resolved_device}")
+        vram_gb = torch.cuda.get_device_properties(gpu_index).total_memory / (1024**3)
+        print(
+            f"[i] Treinando em GPU CUDA: {gpu_name} ({vram_gb:.1f} GB VRAM) | device={resolved_device}"
+        )
     else:
         print(f"[i] Treinando em CPU | device={resolved_device}")
 
@@ -276,7 +289,7 @@ def train(
                 T_max=max(1, epochs - warmup_epochs),
                 eta_min=1e-6,
             )
-            scheduler: torch.optim.lr_scheduler.LRScheduler = torch.optim.lr_scheduler.SequentialLR(
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
                 optimizer,
                 schedulers=[warmup_scheduler, cosine_scheduler],
                 milestones=[warmup_epochs],
@@ -347,13 +360,13 @@ def train(
 
         print()
 
-        mean_train_loss = train_loss_sum / len(train_loader.dataset)
-        mean_validation_loss = validation_loss_sum / len(validation_loader.dataset)
-        mean_validation_mae = validation_mae_sum / len(validation_loader.dataset)
-        if normalized_scheduler == "cosine":
-            scheduler.step()
-        else:
+        mean_train_loss = train_loss_sum / len(train_dataset)
+        mean_validation_loss = validation_loss_sum / len(validation_dataset)
+        mean_validation_mae = validation_mae_sum / len(validation_dataset)
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(mean_validation_loss)
+        else:
+            scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:02d}/{epochs} | train_loss={mean_train_loss:.4f} | "
@@ -392,15 +405,39 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Treina um modelo registrado para supressão de ruído.")
-    parser.add_argument("--model", type=str, default="tinyunet", choices=list_available_models(), help="Arquitetura a treinar.")
-    parser.add_argument("--loss", type=str, default="bce", choices=list_available_losses(), help="Função de perda.")
-    parser.add_argument("--scheduler", type=str, default="plateau", choices=["plateau", "cosine"], help="Tipo de agendador de LR.")
-    parser.add_argument("--scheduler_patience", type=int, default=5, help="Paciência do ReduceLROnPlateau.")
-    parser.add_argument("--augment_spec", action="store_true", help="Ativa perturbação on-the-fly do espectrograma no treino.")
+    parser = argparse.ArgumentParser(
+        description="Treina um modelo registrado para supressão de ruído."
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="tinyunet",
+        choices=list_available_models(),
+        help="Arquitetura a treinar.",
+    )
+    parser.add_argument(
+        "--loss", type=str, default="bce", choices=list_available_losses(), help="Função de perda."
+    )
+    parser.add_argument(
+        "--scheduler",
+        type=str,
+        default="plateau",
+        choices=["plateau", "cosine"],
+        help="Tipo de agendador de LR.",
+    )
+    parser.add_argument(
+        "--scheduler_patience", type=int, default=5, help="Paciência do ReduceLROnPlateau."
+    )
+    parser.add_argument(
+        "--augment_spec",
+        action="store_true",
+        help="Ativa perturbação on-the-fly do espectrograma no treino.",
+    )
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay do AdamW.")
     parser.add_argument("--epochs", type=int, default=20, help="Numero de epocas de treino.")
-    parser.add_argument("--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0).")
+    parser.add_argument(
+        "--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0)."
+    )
     args = parser.parse_args()
     train(
         epochs=args.epochs,

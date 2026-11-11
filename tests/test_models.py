@@ -1,7 +1,7 @@
 import json
+
 import numpy as np
 import torch
-import torch.nn as nn
 
 from src.benchmark import count_macs, count_parameters
 from src.cli import main as cli_main
@@ -20,7 +20,9 @@ def test_build_model_returns_ds_tinyunet():
 
 def test_ds_tinyunet_uses_depthwise_convolutions():
     model = DSTinyUNet(in_channels=1, base_channels=8)
-    spatial_convs = [m for m in model.modules() if isinstance(m, nn.Conv2d) and m.kernel_size == (3, 3)]
+    spatial_convs = [
+        m for m in model.modules() if isinstance(m, torch.nn.Conv2d) and m.kernel_size == (3, 3)
+    ]
     stem_conv = spatial_convs[0]
     assert stem_conv.in_channels == 1 and stem_conv.out_channels == 8 and stem_conv.groups == 1
     for conv in spatial_convs[1:]:
@@ -60,7 +62,11 @@ def test_ds_tinyunet_checkpoint_roundtrip(tmp_path):
     source_model = DSTinyUNet(in_channels=1, base_channels=8)
     ckpt_path = tmp_path / "ds_tinyunet.pth"
     torch.save(
-        {"model_name": "ds_tinyunet", "model_state_dict": source_model.state_dict(), "base_channels": 8},
+        {
+            "model_name": "ds_tinyunet",
+            "model_state_dict": source_model.state_dict(),
+            "base_channels": 8,
+        },
         ckpt_path,
     )
     loaded_model, dsp_config = load_model(ckpt_path, device=torch.device("cpu"))
@@ -125,5 +131,3 @@ def test_apply_spec_augmentation_preserves_shape_and_finiteness():
     assert augmented.shape == noisy_mag.shape
     assert torch.all(torch.isfinite(augmented))
     assert not torch.allclose(augmented, noisy_mag)
-
-

@@ -6,9 +6,7 @@ import random
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-import librosa
 import numpy as np
 import soundfile as sf
 import soxr
@@ -50,7 +48,17 @@ class NoiseSuppressionDataset(Dataset):
     Dataset customizado que carrega áudios, soma limpo + ruído,
     e retorna o espectrograma sujo e a máscara IRM correspondente.
     """
-    def __init__(self, clean_dir: str, noise_dir: str, sr: int = 16000, n_fft: int = 512, hop_length: int = 256, snr_range: Tuple[float, float] = (-5.0, 15.0), target_seconds: float = 2.0):
+
+    def __init__(
+        self,
+        clean_dir: str,
+        noise_dir: str,
+        sr: int = 16000,
+        n_fft: int = 512,
+        hop_length: int = 256,
+        snr_range: tuple[float, float] = (-5.0, 15.0),
+        target_seconds: float = 2.0,
+    ):
         self.sr = sr
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -58,12 +66,12 @@ class NoiseSuppressionDataset(Dataset):
         self.target_seconds = target_seconds
         self.target_num_samples = int(sr * target_seconds)
 
-        self.clean_files: List[str] = self._collect_audio_files(clean_dir)
-        self.noise_files: List[str] = self._collect_audio_files(noise_dir)
-        self._noise_cache: Dict[str, np.ndarray] = {}
+        self.clean_files: list[str] = self._collect_audio_files(clean_dir)
+        self.noise_files: list[str] = self._collect_audio_files(noise_dir)
+        self._noise_cache: dict[str, np.ndarray] = {}
 
-    def _collect_audio_files(self, directory: str) -> List[str]:
-        files: List[str] = []
+    def _collect_audio_files(self, directory: str) -> list[str]:
+        files: list[str] = []
         for extension in ("*.wav", "*.webm", "*.mp3"):
             files.extend(glob.glob(os.path.join(directory, extension)))
         return sorted(files)
@@ -109,7 +117,9 @@ class NoiseSuppressionDataset(Dataset):
             self._noise_cache[noise_file] = self._load_audio(noise_file)
         return self._noise_cache[noise_file]
 
-    def _sample_noise_segment(self, noise_file: str, rng: Optional[random.Random] = None) -> np.ndarray:
+    def _sample_noise_segment(
+        self, noise_file: str, rng: random.Random | None = None
+    ) -> np.ndarray:
         full_noise = self._get_cached_noise_audio(noise_file)
         return sample_noise_window(full_noise, self.target_num_samples, rng=rng)
 
@@ -119,7 +129,9 @@ class NoiseSuppressionDataset(Dataset):
     def __len__(self) -> int:
         return len(self.clean_files)
 
-    def _add_noise(self, clean: np.ndarray, noise: np.ndarray, snr_db: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, float]:
+    def _add_noise(
+        self, clean: np.ndarray, noise: np.ndarray, snr_db: float | None = None
+    ) -> tuple[np.ndarray, np.ndarray, float]:
         """
         Mistura limpo + ruído na SNR alvo (dB) via mix_at_snr.
         Se snr_db for None, sorteia uniformemente de self.snr_range.
@@ -130,7 +142,9 @@ class NoiseSuppressionDataset(Dataset):
         noisy, scaled_noise = mix_at_snr(clean, noise, snr_db)
         return noisy, scaled_noise, float(snr_db)
 
-    def export_noisy_dataset(self, output_dir: str, samples_per_clean: int = 1, save_clean_copies: bool = True) -> Path:
+    def export_noisy_dataset(
+        self, output_dir: str, samples_per_clean: int = 1, save_clean_copies: bool = True
+    ) -> Path:
         """Gera um dataset ruidoso em disco a partir das pastas de limpo e ruído."""
         if not self.clean_files:
             raise ValueError("Nenhum arquivo limpo encontrado para exportação.")
@@ -167,7 +181,9 @@ class NoiseSuppressionDataset(Dataset):
                     noise_audio = self._sample_noise_segment(noise_file)
                     noisy_audio, _, snr_db = self._add_noise(clean_audio, noise_audio)
 
-                    output_name = f"{clean_stem}__noise-{Path(noise_file).stem}__{sample_index:03d}.wav"
+                    output_name = (
+                        f"{clean_stem}__noise-{Path(noise_file).stem}__{sample_index:03d}.wav"
+                    )
                     noisy_path = noisy_output_dir / output_name
                     sf.write(noisy_path, noisy_audio, self.sr, subtype="FLOAT")
 
@@ -191,37 +207,39 @@ class NoiseSuppressionDataset(Dataset):
         if total_samples > 0:
             print()
         if skipped_silent > 0:
-            print(f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6).")
+            print(
+                f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6)."
+            )
 
         return metadata_path
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         # 1. Carrega os áudios
         clean_path = self.clean_files[idx]
         clean_audio = self._fix_length(self._load_audio(clean_path))
-        
+
         noise_path = random.choice(self.noise_files)
         noise_audio = self._sample_noise_segment(noise_path)
-        
+
         # 2. Soma limpa + ruído no domínio do tempo
         # SNR sorteada a cada chamada (augmentation on-the-fly)
         # O ruído escalado retornado é o ruído real adicionado (necessário para a IRM)
         noisy_audio, noise_audio_matched, _ = self._add_noise(clean_audio, noise_audio)
-        
+
         # 3. Transforma para o domínio da frequência
         clean_mag, _ = compute_stft(clean_audio, self.n_fft, self.hop_length)
         noise_mag, _ = compute_stft(noise_audio_matched, self.n_fft, self.hop_length)
         noisy_mag, _ = compute_stft(noisy_audio, self.n_fft, self.hop_length)
         noisy_mag_input = preprocess_noisy_magnitude(noisy_mag)
-        
+
         # 4. Calcula a Máscara de Proporção Ideal (Gabarito)
         irm = compute_irm(clean_mag, noise_mag)
-        
+
         # 5. Conversão para Tensores PyTorch
         # Adiciona a dimensão de canal (Batch, Channel, Height, Width)
         noisy_mag_tensor = torch.from_numpy(noisy_mag_input).float().unsqueeze(0)
         irm_tensor = torch.from_numpy(irm).float().unsqueeze(0)
-        
+
         return noisy_mag_tensor, irm_tensor
 
 
@@ -250,7 +268,7 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
     def __len__(self) -> int:
         return len(self.sample_files)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample = torch.load(self.sample_files[idx], map_location="cpu")
         return sample["noisy_mag"], sample["irm"]
 
@@ -264,7 +282,7 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
         hop_length: int = 256,
         target_seconds: float = 2.0,
         samples_per_clean: int = 1,
-        snr_range: Tuple[float, float] = (-5.0, 15.0),
+        snr_range: tuple[float, float] = (-5.0, 15.0),
     ) -> Path:
         """Gera um dataset pré-computado em .pt com noisy_mag e irm, mixando na SNR sorteada de snr_range."""
         source_dataset = NoiseSuppressionDataset(
@@ -319,14 +337,19 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
                 for sample_index in range(samples_per_clean):
                     noise_file = random.choice(source_dataset.noise_files)
                     noise_audio = source_dataset._sample_noise_segment(noise_file)
-                    noisy_audio, noise_audio_matched, snr_db = source_dataset._add_noise(clean_audio, noise_audio)
+                    noisy_audio, noise_audio_matched, snr_db = source_dataset._add_noise(
+                        clean_audio, noise_audio
+                    )
 
                     noise_mag, _ = compute_stft(noise_audio_matched, n_fft, hop_length)
                     noisy_mag, _ = compute_stft(noisy_audio, n_fft, hop_length)
                     irm = compute_irm(clean_mag, noise_mag)
                     noisy_mag_input = preprocess_noisy_magnitude(noisy_mag)
 
-                    sample_file = output_path / f"{clean_stem}__noise-{Path(noise_file).stem}__{sample_index:03d}.pt"
+                    sample_file = (
+                        output_path
+                        / f"{clean_stem}__noise-{Path(noise_file).stem}__{sample_index:03d}.pt"
+                    )
                     torch.save(
                         {
                             "noisy_mag": torch.from_numpy(noisy_mag_input).float().unsqueeze(0),
@@ -352,7 +375,9 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
         if total_samples > 0:
             print()
         if skipped_silent > 0:
-            print(f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6).")
+            print(
+                f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6)."
+            )
 
         temp_metadata_path.replace(metadata_path)
 

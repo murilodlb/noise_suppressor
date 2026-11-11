@@ -1,7 +1,6 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 import soundfile as sf
 
@@ -22,35 +21,90 @@ def _build_parser() -> argparse.ArgumentParser:
         "augment_noise",
         help="Synthesize non-stationary noise files by concatenating, slicing, and merging base noise clips",
     )
-    p_aug.add_argument("--noise_dir", type=str, default="data/noise", help="Directory with base noise audio samples")
-    p_aug.add_argument("--output_dir", type=str, default=None, help="Optional output directory (defaults to noise_dir)")
-    p_aug.add_argument("--num_files", type=int, default=90, help="Number of synthetic noise files to generate")
-    p_aug.add_argument("--duration", type=float, default=10.0, help="Duration in seconds of each generated noise file")
+    p_aug.add_argument(
+        "--noise_dir",
+        type=str,
+        default="data/noise",
+        help="Directory with base noise audio samples",
+    )
+    p_aug.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Optional output directory (defaults to noise_dir)",
+    )
+    p_aug.add_argument(
+        "--num_files", type=int, default=90, help="Number of synthetic noise files to generate"
+    )
+    p_aug.add_argument(
+        "--duration",
+        type=float,
+        default=10.0,
+        help="Duration in seconds of each generated noise file",
+    )
     p_aug.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     # 1. Preprocess
-    p_prep = subparsers.add_parser("preprocess", help="Precompute STFT magnitudes and IRM masks to disk (.pt)")
-    p_prep.add_argument("--clean_dir", type=str, default="data/clean", help="Directory with clean audio samples")
-    p_prep.add_argument("--noise_dir", type=str, default="data/noise", help="Directory with noise audio samples")
-    p_prep.add_argument("--output_dir", type=str, default="data/precomputed", help="Output directory for .pt files")
-    p_prep.add_argument("--samples_per_clean", type=int, default=1, help="Number of noise mixes per clean file")
+    p_prep = subparsers.add_parser(
+        "preprocess", help="Precompute STFT magnitudes and IRM masks to disk (.pt)"
+    )
+    p_prep.add_argument(
+        "--clean_dir", type=str, default="data/clean", help="Directory with clean audio samples"
+    )
+    p_prep.add_argument(
+        "--noise_dir", type=str, default="data/noise", help="Directory with noise audio samples"
+    )
+    p_prep.add_argument(
+        "--output_dir", type=str, default="data/precomputed", help="Output directory for .pt files"
+    )
+    p_prep.add_argument(
+        "--samples_per_clean", type=int, default=1, help="Number of noise mixes per clean file"
+    )
     p_prep.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    p_prep.add_argument("--snr_low", type=float, default=-5.0, help="Lower bound of the SNR sampling range (dB)")
-    p_prep.add_argument("--snr_high", type=float, default=15.0, help="Upper bound of the SNR sampling range (dB)")
+    p_prep.add_argument(
+        "--snr_low", type=float, default=-5.0, help="Lower bound of the SNR sampling range (dB)"
+    )
+    p_prep.add_argument(
+        "--snr_high", type=float, default=15.0, help="Upper bound of the SNR sampling range (dB)"
+    )
 
     available_models = list_available_models()
     available_losses = list_available_losses()
 
     # 2. Train
     p_train = subparsers.add_parser("train", help="Train a registered noise suppression model")
-    p_train.add_argument("--model", type=str, default="tinyunet", choices=available_models, help="Model architecture to train")
-    p_train.add_argument("--loss", type=str, default="bce", choices=available_losses, help="Loss function for mask optimization")
-    p_train.add_argument("--scheduler", type=str, default="plateau", choices=["plateau", "cosine"], help="LR scheduler ('plateau' or 'cosine')")
-    p_train.add_argument("--scheduler_patience", type=int, default=5, help="ReduceLROnPlateau patience (epochs)")
+    p_train.add_argument(
+        "--model",
+        type=str,
+        default="tinyunet",
+        choices=available_models,
+        help="Model architecture to train",
+    )
+    p_train.add_argument(
+        "--loss",
+        type=str,
+        default="bce",
+        choices=available_losses,
+        help="Loss function for mask optimization",
+    )
+    p_train.add_argument(
+        "--scheduler",
+        type=str,
+        default="plateau",
+        choices=["plateau", "cosine"],
+        help="LR scheduler ('plateau' or 'cosine')",
+    )
+    p_train.add_argument(
+        "--scheduler_patience", type=int, default=5, help="ReduceLROnPlateau patience (epochs)"
+    )
     p_train.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
     p_train.add_argument("--batch_size", type=int, default=4, help="Batch size")
-    p_train.add_argument("--learning_rate", type=float, default=1e-3, help="Initial Adam learning rate")
-    p_train.add_argument("--validation_ratio", type=float, default=0.2, help="Ratio of clean sources for validation")
+    p_train.add_argument(
+        "--learning_rate", type=float, default=1e-3, help="Initial Adam learning rate"
+    )
+    p_train.add_argument(
+        "--validation_ratio", type=float, default=0.2, help="Ratio of clean sources for validation"
+    )
     p_train.add_argument("--seed", type=int, default=42, help="Random seed")
     p_train.add_argument("--data_root", type=str, default="data", help="Root directory for dataset")
     p_train.add_argument(
@@ -59,72 +113,215 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Checkpoint save path (default: checkpoints/<model>_ch<base_channels>_<loss>.pth)",
     )
-    p_train.add_argument("--base_channels", type=int, default=8, help="Base channel count for the model")
-    p_train.add_argument("--num_workers", type=int, default=0, help="PyTorch DataLoader worker count")
-    p_train.add_argument("--snr_low", type=float, default=-5.0, help="Lower SNR bound (dB) for online mixing")
-    p_train.add_argument("--snr_high", type=float, default=15.0, help="Upper SNR bound (dB) for online mixing")
-    p_train.add_argument("--augment_spec", action="store_true", help="Enable on-the-fly spectrogram perturbation during training")
+    p_train.add_argument(
+        "--base_channels", type=int, default=8, help="Base channel count for the model"
+    )
+    p_train.add_argument(
+        "--num_workers", type=int, default=0, help="PyTorch DataLoader worker count"
+    )
+    p_train.add_argument(
+        "--snr_low", type=float, default=-5.0, help="Lower SNR bound (dB) for online mixing"
+    )
+    p_train.add_argument(
+        "--snr_high", type=float, default=15.0, help="Upper SNR bound (dB) for online mixing"
+    )
+    p_train.add_argument(
+        "--augment_spec",
+        action="store_true",
+        help="Enable on-the-fly spectrogram perturbation during training",
+    )
     p_train.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
-    p_train.add_argument("--device", type=str, default="auto", help="Device (auto, cpu, cuda, cuda:0)")
+    p_train.add_argument(
+        "--device", type=str, default="auto", help="Device (auto, cpu, cuda, cuda:0)"
+    )
 
     # 3. Infer
     p_infer = subparsers.add_parser("infer", help="Denoise one or more audio files")
     p_infer.add_argument("--input", nargs="+", required=True, help="Path(s) to noisy audio files")
-    p_infer.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Model checkpoint path")
-    p_infer.add_argument("--model", type=str, default=None, choices=available_models, help="Optional model architecture fallback for legacy checkpoints")
-    p_infer.add_argument("--output_dir", type=str, default="reports/inference", help="Directory to save enhanced files")
+    p_infer.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default="checkpoints/tinyunet.pth",
+        help="Model checkpoint path",
+    )
+    p_infer.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=available_models,
+        help="Optional model architecture fallback for legacy checkpoints",
+    )
+    p_infer.add_argument(
+        "--output_dir",
+        type=str,
+        default="reports/inference",
+        help="Directory to save enhanced files",
+    )
     p_infer.add_argument("--device", type=str, default="cpu", help="Device (cpu or cuda)")
 
     # 4. Demo (PoC)
-    p_demo = subparsers.add_parser("demo", help="Run end-to-end PoC demonstration with plots and audio exports")
+    p_demo = subparsers.add_parser(
+        "demo", help="Run end-to-end PoC demonstration with plots and audio exports"
+    )
     p_demo.add_argument("--clean_path", type=str, default=None, help="Path to clean test audio")
     p_demo.add_argument("--noise_path", type=str, default=None, help="Path to noise audio")
-    p_demo.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Model checkpoint path")
-    p_demo.add_argument("--model", type=str, default=None, choices=available_models, help="Optional model architecture fallback for legacy checkpoints")
-    p_demo.add_argument("--output_dir", type=str, default="data", help="Output directory for demo audio and plots")
+    p_demo.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default="checkpoints/tinyunet.pth",
+        help="Model checkpoint path",
+    )
+    p_demo.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=available_models,
+        help="Optional model architecture fallback for legacy checkpoints",
+    )
+    p_demo.add_argument(
+        "--output_dir", type=str, default="data", help="Output directory for demo audio and plots"
+    )
     p_demo.add_argument("--seed", type=int, default=42, help="Random seed")
-    p_demo.add_argument("--snr_db", type=float, default=5.0, help="Target SNR (dB) for mixing clean and noise in the demo")
+    p_demo.add_argument(
+        "--snr_db",
+        type=float,
+        default=5.0,
+        help="Target SNR (dB) for mixing clean and noise in the demo",
+    )
 
     # 5. Evaluate
-    p_eval = subparsers.add_parser("evaluate", help="Evaluate model on validation split against Noisy and Oracle IRM")
-    p_eval.add_argument("--checkpoint_path", type=str, default="checkpoints/tinyunet.pth", help="Model checkpoint path")
-    p_eval.add_argument("--model", type=str, default=None, choices=available_models, help="Optional model architecture fallback for legacy checkpoints")
+    p_eval = subparsers.add_parser(
+        "evaluate", help="Evaluate model on validation split against Noisy and Oracle IRM"
+    )
+    p_eval.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default="checkpoints/tinyunet.pth",
+        help="Model checkpoint path",
+    )
+    p_eval.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=available_models,
+        help="Optional model architecture fallback for legacy checkpoints",
+    )
     p_eval.add_argument("--data_root", type=str, default="data", help="Data directory root")
-    p_eval.add_argument("--output_dir", type=str, default="reports/evaluation", help="Directory for evaluation reports")
-    p_eval.add_argument("--validation_ratio", type=float, default=0.2, help="Ratio used to reconstruct validation split")
+    p_eval.add_argument(
+        "--output_dir",
+        type=str,
+        default="reports/evaluation",
+        help="Directory for evaluation reports",
+    )
+    p_eval.add_argument(
+        "--validation_ratio",
+        type=float,
+        default=0.2,
+        help="Ratio used to reconstruct validation split",
+    )
     p_eval.add_argument("--seed", type=int, default=42, help="Random seed for validation split")
-    p_eval.add_argument("--max_samples", type=int, default=None, help="Maximum number of validation samples to evaluate")
-    p_eval.add_argument("--lc_db", type=float, default=0.0, help="Local Criterion in dB for mask binarization threshold")
+    p_eval.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Maximum number of validation samples to evaluate",
+    )
+    p_eval.add_argument(
+        "--lc_db",
+        type=float,
+        default=0.0,
+        help="Local Criterion in dB for mask binarization threshold",
+    )
     p_eval.add_argument("--device", type=str, default="cpu", help="Device (cpu or cuda)")
 
     # 6. Benchmark
-    p_bench = subparsers.add_parser("benchmark", help="Benchmark MACs, parameters, memory, latency, and RTF")
+    p_bench = subparsers.add_parser(
+        "benchmark", help="Benchmark MACs, parameters, memory, latency, and RTF"
+    )
     p_bench.add_argument(
         "--checkpoint_path",
         type=str,
         default=None,
         help="Optional model checkpoint path; if omitted, benchmarks architecture specified by --model and --base_channels",
     )
-    p_bench.add_argument("--model", type=str, default=None, choices=available_models, help="Model architecture to benchmark (overrides checkpoint or benchmarks untrained model)")
-    p_bench.add_argument("--base_channels", type=int, default=8, help="Base channels when benchmarking an uninitialized model")
-    p_bench.add_argument("--seconds", type=float, default=2.0, help="Duration of test audio in seconds")
+    p_bench.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=available_models,
+        help="Model architecture to benchmark (overrides checkpoint or benchmarks untrained model)",
+    )
+    p_bench.add_argument(
+        "--base_channels",
+        type=int,
+        default=8,
+        help="Base channels when benchmarking an uninitialized model",
+    )
+    p_bench.add_argument(
+        "--seconds", type=float, default=2.0, help="Duration of test audio in seconds"
+    )
     p_bench.add_argument("--warmup", type=int, default=5, help="Number of warmup iterations")
-    p_bench.add_argument("--repeats", type=int, default=50, help="Number of timed benchmark repetitions")
-    p_bench.add_argument("--num_threads", type=int, default=None, help="Torch CPU intra-op thread count")
+    p_bench.add_argument(
+        "--repeats", type=int, default=50, help="Number of timed benchmark repetitions"
+    )
+    p_bench.add_argument(
+        "--num_threads", type=int, default=None, help="Torch CPU intra-op thread count"
+    )
     p_bench.add_argument("--device", type=str, default="cpu", help="Device (cpu or cuda)")
-    p_bench.add_argument("--output_path", type=str, default="reports/benchmark/benchmark.json", help="Output JSON path")
+    p_bench.add_argument(
+        "--output_path",
+        type=str,
+        default="reports/benchmark/benchmark.json",
+        help="Output JSON path",
+    )
+
+    # 7. Compare Reports
+    p_comp = subparsers.add_parser(
+        "compare_reports",
+        help="Compare evaluation reports from a directory and export a comparison CSV with ideal metric benchmarks",
+    )
+    p_comp.add_argument(
+        "--reports_dir",
+        type=str,
+        default="reports/evaluation",
+        help="Directory containing evaluation report folders",
+    )
+    p_comp.add_argument(
+        "--output_csv",
+        type=str,
+        default=None,
+        help="Output CSV path (default: <reports_dir>/comparison_report.csv)",
+    )
+    p_comp.add_argument(
+        "--output_md",
+        type=str,
+        default=None,
+        help="Output Markdown path (default: <reports_dir>/comparison_report.md)",
+    )
+    p_comp.add_argument(
+        "--sort_by",
+        type=str,
+        default="si_sdr_mean_db",
+        help="Metric column to sort results by",
+    )
+    p_comp.add_argument(
+        "--ascending",
+        action="store_true",
+        help="Sort results in ascending order instead of descending",
+    )
 
     return parser
 
 
 def run_infer(
-    input_files: List[str],
+    input_files: list[str],
     checkpoint_path: str,
     output_dir: str,
     device: str = "cpu",
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
 ) -> None:
     import torch
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -156,12 +353,13 @@ def run_infer(
         print(f"[+] Áudio aprimorado salvo em: {out_file}")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "augment_noise":
         from .noise_augmenter import augment_noise_bank
+
         augment_noise_bank(
             noise_dir=args.noise_dir,
             output_dir=args.output_dir,
@@ -171,6 +369,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "preprocess":
         from .preprocess_dataset import run_preprocess
+
         run_preprocess(
             clean_dir=args.clean_dir,
             noise_dir=args.noise_dir,
@@ -181,6 +380,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "train":
         from .train import train
+
         train(
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -210,6 +410,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "demo":
         from .main import run_demo
+
         run_demo(
             clean_path=args.clean_path,
             noise_path=args.noise_path,
@@ -221,6 +422,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "evaluate":
         from .evaluate import evaluate
+
         evaluate(
             checkpoint_path=args.checkpoint_path,
             data_root=args.data_root,
@@ -234,8 +436,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.command == "benchmark":
         from .benchmark import run_benchmark
+
         if args.checkpoint_path is not None:
-            ckpt_arg: Optional[Path | str] = Path(args.checkpoint_path)
+            ckpt_arg: Path | str | None = Path(args.checkpoint_path)
         elif args.model is None:
             default_ckpt = Path("checkpoints/tinyunet.pth")
             ckpt_arg = default_ckpt if default_ckpt.exists() else None
@@ -251,6 +454,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             output_path=args.output_path,
             model_name=args.model,
             base_channels=args.base_channels,
+        )
+    elif args.command == "compare_reports":
+        from .report_comparator import compare_reports
+
+        compare_reports(
+            reports_dir=args.reports_dir,
+            output_csv=args.output_csv,
+            output_md=args.output_md,
+            sort_by=args.sort_by,
+            descending=not args.ascending,
         )
 
     return 0

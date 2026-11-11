@@ -102,7 +102,7 @@ echo "============================================================"
 
 # 1. Inspect NVIDIA GPU hardware
 if command -v nvidia-smi >/dev/null 2>&1; then
-    echo "[1/6] Verificando GPU NVIDIA via nvidia-smi..."
+    echo "[1/7] Verificando GPU NVIDIA via nvidia-smi..."
     nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv
 else
     echo "[!] AVISO: nvidia-smi não encontrado no PATH. Verifique se o job alocou GPU (--gres=gpu:1)."
@@ -119,9 +119,9 @@ fi
 
 # 3. Sync base environment and install CUDA-enabled PyTorch if needed (race-condition safe)
 if uv run --no-sync python -c "import torch, soxr, pesq, pystoi, imageio_ffmpeg, sys; sys.exit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; then
-    echo "[2/6] Ambiente Python + PyTorch CUDA já validado e pronto (pulando uv sync)."
+    echo "[2/7] Ambiente Python + PyTorch CUDA já validado e pronto (pulando uv sync)."
 else
-    echo "[2/6] Sincronizando ambiente Python via uv..."
+    echo "[2/7] Sincronizando ambiente Python via uv..."
     uv sync
     echo "[i] Instalando PyTorch com suporte CUDA (${CUDA_WHEEL})..."
     uv pip install --reinstall-package torch torch --index-url "https://download.pytorch.org/whl/${CUDA_WHEEL}"
@@ -141,7 +141,7 @@ print(f" - GPU 0           : {torch.cuda.get_device_name(0)}")
 EOF
 
 # 4. Expand non-stationary noise bank (run once if missing or forced) and precompute dataset
-echo "[3/6] Verificando banco de ruídos expandido e dataset pré-computado..."
+echo "[3/7] Verificando banco de ruídos expandido e dataset pré-computado..."
 NEED_PREPROCESS=0
 if [ "${AUGMENT_NOISE}" = "1" ]; then
     if [ "${FORCE_AUGMENT_NOISE}" = "1" ] || [ ! -f "data/noise/aug_noise_0001.wav" ]; then
@@ -188,7 +188,7 @@ if [ "${AUGMENT_SPEC}" = "1" ]; then
     TRAIN_EXTRA_ARGS+=(--augment_spec)
 fi
 
-echo "[4/6] Iniciando treinamento do modelo '${MODEL}' (ch=${BASE_CHANNELS}, loss='${LOSS}', scheduler='${SCHEDULER}') em GPU (CUDA)..."
+echo "[4/7] Iniciando treinamento do modelo '${MODEL}' (ch=${BASE_CHANNELS}, loss='${LOSS}', scheduler='${SCHEDULER}') em GPU (CUDA)..."
 uv run --no-sync noise_suppressor train \
     --model "${MODEL}" \
     --loss "${LOSS}" \
@@ -209,7 +209,7 @@ uv run --no-sync noise_suppressor train \
     "${TRAIN_EXTRA_ARGS[@]}"
 
 # 6. Evaluate trained weights on validation split
-echo "[5/6] Avaliando pesos treinados no split de validação..."
+echo "[5/7] Avaliando pesos treinados no split de validação..."
 uv run --no-sync noise_suppressor evaluate \
     --model "${MODEL}" \
     --device cuda \
@@ -218,17 +218,24 @@ uv run --no-sync noise_suppressor evaluate \
     --seed "${SEED}"
 
 # 7. Benchmark computational overhead on CPU
-echo "[6/6] Executando benchmark de overhead computacional..."
+echo "[6/7] Executando benchmark de overhead computacional..."
 uv run --no-sync noise_suppressor benchmark \
     --checkpoint_path "${CHECKPOINT_PATH}" \
     --device cpu \
     --repeats 50 \
     --output_path "${BENCHMARK_PATH}"
 
+# 8. Compare all evaluation reports and update comparison CSV
+echo "[7/7] Atualizando tabela comparativa de relatórios com referências ideais..."
+uv run --no-sync noise_suppressor compare_reports \
+    --reports_dir reports/evaluation \
+    --output_csv reports/evaluation/comparison_report.csv
+
 echo "============================================================"
-echo " [+] Treinamento, avaliação e benchmark concluídos com sucesso!"
-echo " [+] Pesos salvos em    : ${CHECKPOINT_PATH}"
-echo " [+] Benchmark salvo em : ${BENCHMARK_PATH}"
+echo " [+] Treinamento, avaliação, benchmark e comparação concluídos!"
+echo " [+] Pesos salvos em       : ${CHECKPOINT_PATH}"
+echo " [+] Benchmark salvo em    : ${BENCHMARK_PATH}"
+echo " [+] Comparação salva em   : reports/evaluation/comparison_report.csv"
 echo " Para usar os pesos localmente na sua máquina (CPU ou GPU):"
 echo "   scp <usuario>@<cluster>:$(pwd)/${CHECKPOINT_PATH} ./checkpoints/"
 echo "   uv run noise_suppressor demo --checkpoint_path ${CHECKPOINT_PATH}"
