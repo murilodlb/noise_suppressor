@@ -5,14 +5,24 @@ from pathlib import Path
 import soundfile as sf
 
 from .inference import enhance_signal, load_audio_file, load_model
+from .logger import configure_logging, get_logger
 from .losses import list_available_losses
 from .model import list_available_models
+
+logger = get_logger(__name__)
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="noise_suppressor",
         description="Non-stationary noise suppression CLI for training, inference, evaluation, and benchmarking.",
+    )
+    parser.add_argument(
+        "--log_level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity level",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommand to execute")
 
@@ -133,6 +143,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
     p_train.add_argument(
         "--device", type=str, default="auto", help="Device (auto, cpu, cuda, cuda:0)"
+    )
+    p_train.add_argument(
+        "--report_dir",
+        type=str,
+        default=None,
+        help="Directory to save training_history.json and training_curves.png (default: reports/training/<checkpoint_stem>)",
     )
 
     # 3. Infer
@@ -331,11 +347,11 @@ def run_infer(
     n_fft = dsp_config.get("n_fft", 512)
     hop_length = dsp_config.get("hop_length", 256)
 
-    print(f"[i] Executando inferência em {len(input_files)} arquivo(s)...")
+    logger.info("Running inference on %d file(s)...", len(input_files))
     for file_str in input_files:
         p = Path(file_str)
         if not p.exists():
-            print(f"[!] Arquivo não encontrado: {p}")
+            logger.warning("Input file not found: %s", p)
             continue
 
         noisy_sig = load_audio_file(p, sr=sr)
@@ -350,12 +366,13 @@ def run_infer(
         out_name = f"{p.stem}_enhanced.wav"
         out_file = out_dir / out_name
         sf.write(str(out_file), result.enhanced_signal, sr)
-        print(f"[+] Áudio aprimorado salvo em: {out_file}")
+        logger.info("Saved enhanced audio to: %s", out_file)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    configure_logging(level=args.log_level)
 
     if args.command == "augment_noise":
         from .noise_augmenter import augment_noise_bank
@@ -399,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
             scheduler_type=args.scheduler,
             augment_spec=args.augment_spec,
             weight_decay=args.weight_decay,
+            report_dir=Path(args.report_dir) if args.report_dir else None,
         )
     elif args.command == "infer":
         run_infer(

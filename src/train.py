@@ -1,8 +1,10 @@
 import argparse
 import csv
 import random
+import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Subset, random_split
@@ -12,6 +14,12 @@ try:
         NoiseSuppressionDataset,
         PrecomputedNoiseSuppressionDataset,
     )
+    from .logger import (
+        configure_logging,
+        get_logger,
+        plot_training_curves,
+        save_training_history,
+    )
     from .losses import build_loss, list_available_losses
     from .model import build_model, list_available_models
 except ImportError:
@@ -19,15 +27,26 @@ except ImportError:
         NoiseSuppressionDataset,
         PrecomputedNoiseSuppressionDataset,
     )
+    from logger import (
+        configure_logging,
+        get_logger,
+        plot_training_curves,
+        save_training_history,
+    )
     from losses import build_loss, list_available_losses
     from model import build_model, list_available_models
 
+logger = get_logger(__name__)
+
 
 def _print_progress_bar(current: int, total: int, prefix: str, suffix: str = "") -> None:
+    if not sys.stdout.isatty():
+        return
     bar_length = 30
     filled_length = int(bar_length * current // total) if total else bar_length
     bar = "█" * filled_length + "-" * (bar_length - filled_length)
-    print(f"\r{prefix} |{bar}| {current}/{total} {suffix}", end="", flush=True)
+    end_char = "\n" if total and current >= total else ""
+    print(f"\r{prefix} |{bar}| {current}/{total} {suffix}", end=end_char, flush=True)
 
 
 def _split_indices_by_clean_source(
@@ -130,7 +149,7 @@ def train(
     validation_ratio: float = 0.2,
     seed: int = 42,
     data_root: Path = Path("data"),
-    checkpoint_path: Path | None | None = None,
+    checkpoint_path: Path | None = None,
     base_channels: int = 8,
     num_workers: int = 0,
     snr_range: tuple[float, float] = (-5.0, 15.0),
@@ -141,6 +160,7 @@ def train(
     scheduler_type: str = "plateau",
     augment_spec: bool = False,
     weight_decay: float = 1e-4,
+    report_dir: Path | None = None,
 ) -> Path:
     torch.manual_seed(seed)
     random.seed(seed)
@@ -156,6 +176,11 @@ def train(
         checkpoint_path = Path(
             f"checkpoints/{normalized_model_name}_ch{base_channels}_{normalized_loss_name}.pth"
         )
+    resolved_report_dir = (
+        Path(report_dir)
+        if report_dir is not None
+        else Path("reports/training") / checkpoint_path.stem
+    )
 
     sr = 16000
     n_fft = 512
@@ -171,10 +196,10 @@ def train(
     use_precomputed_dataset = precomputed_dir.exists() and any(precomputed_dir.glob("*.pt"))
 
     if use_precomputed_dataset:
-        print(f"[i] Usando dataset pré-computado em: {precomputed_dir}")
+        logger.info("Using precomputed dataset from: %s", precomputed_dir)
         dataset = PrecomputedNoiseSuppressionDataset(dataset_dir=str(precomputed_dir))
     else:
-        print("[i] Nenhum dataset pré-computado encontrado. Usando pré-processamento online.")
+        logger.info("No precomputed dataset found. Using online audio preprocessing.")
         dataset = NoiseSuppressionDataset(
             clean_dir=str(clean_dir),
             noise_dir=str(noise_dir),
@@ -235,11 +260,14 @@ def train(
         )
         gpu_name = torch.cuda.get_device_name(gpu_index)
         vram_gb = torch.cuda.get_device_properties(gpu_index).total_memory / (1024**3)
-        print(
-            f"[i] Treinando em GPU CUDA: {gpu_name} ({vram_gb:.1f} GB VRAM) | device={resolved_device}"
+        logger.info(
+            "Training on CUDA GPU: %s (%.1f GB VRAM) | device=%s",
+            gpu_name,
+            vram_gb,
+            resolved_device,
         )
     else:
-        print(f"[i] Treinando em CPU | device={resolved_device}")
+        logger.info("Training on CPU | device=%s", resolved_device)
 
     train_loader = DataLoader(
         train_dataset,
@@ -264,11 +292,15 @@ def train(
         base_channels=base_channels,
     ).to(resolved_device)
     criterion = build_loss(normalized_loss_name).to(resolved_device)
-    print(
-        f"[i] Modelo: {normalized_model_name} (ch={base_channels}) | "
-        f"Função de perda: {normalized_loss_name} | "
-        f"scheduler={normalized_scheduler} (patience={scheduler_patience}) | "
-        f"augment_spec={augment_spec} | weight_decay={weight_decay}"
+    logger.info(
+        "Model=%s (ch=%d) | loss=%s | scheduler=%s (patience=%d) | augment_spec=%s | weight_decay=%s",
+        normalized_model_name,
+        base_channels,
+        normalized_loss_name,
+        normalized_scheduler,
+        scheduler_patience,
+        augment_spec,
+        weight_decay,
     )
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -310,6 +342,33 @@ def train(
         )
 
     best_validation_loss = float("inf")
+    best_epoch: int | None = None
+    history: dict[str, Any] = {
+        "metadata": {
+            "model_name": normalized_model_name,
+            "base_channels": base_channels,
+            "loss_name": normalized_loss_name,
+            "scheduler_type": normalized_scheduler,
+            "scheduler_patience": scheduler_patience,
+            "augment_spec": augment_spec,
+            "weight_decay": weight_decay,
+            "batch_size": batch_size,
+            "initial_lr": learning_rate,
+            "validation_ratio": validation_ratio,
+            "seed": seed,
+            "device": str(resolved_device),
+            "checkpoint_path": str(checkpoint_path),
+            "train_samples": len(train_dataset),
+            "validation_samples": len(validation_dataset),
+        },
+        "epochs": [],
+        "train_loss": [],
+        "val_loss": [],
+        "val_mae": [],
+        "learning_rate": [],
+        "best_epoch": None,
+        "best_val_loss": None,
+    }
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -336,8 +395,6 @@ def train(
                 suffix=f"loss={loss.item():.4f}",
             )
 
-        print()
-
         model.eval()
         validation_loss_sum = 0.0
         validation_mae_sum = 0.0
@@ -358,8 +415,6 @@ def train(
                     suffix=f"loss={loss.item():.4f} mae={batch_mae:.4f}",
                 )
 
-        print()
-
         mean_train_loss = train_loss_sum / len(train_dataset)
         mean_validation_loss = validation_loss_sum / len(validation_dataset)
         mean_validation_mae = validation_mae_sum / len(validation_dataset)
@@ -367,15 +422,29 @@ def train(
             scheduler.step(mean_validation_loss)
         else:
             scheduler.step()
-        current_lr = optimizer.param_groups[0]["lr"]
-        print(
-            f"Epoch {epoch:02d}/{epochs} | train_loss={mean_train_loss:.4f} | "
-            f"val_loss={mean_validation_loss:.4f} | val_mae={mean_validation_mae:.4f} | "
-            f"lr={current_lr:.6f}"
+        current_lr = float(optimizer.param_groups[0]["lr"])
+
+        history["epochs"].append(epoch)
+        history["train_loss"].append(float(mean_train_loss))
+        history["val_loss"].append(float(mean_validation_loss))
+        history["val_mae"].append(float(mean_validation_mae))
+        history["learning_rate"].append(current_lr)
+
+        logger.info(
+            "Epoch %02d/%d | train_loss=%.4f | val_loss=%.4f | val_mae=%.4f | lr=%.6f",
+            epoch,
+            epochs,
+            mean_train_loss,
+            mean_validation_loss,
+            mean_validation_mae,
+            current_lr,
         )
 
         if mean_validation_loss < best_validation_loss:
             best_validation_loss = mean_validation_loss
+            best_epoch = epoch
+            history["best_epoch"] = best_epoch
+            history["best_val_loss"] = float(best_validation_loss)
             torch.save(
                 {
                     "model_name": normalized_model_name,
@@ -399,7 +468,12 @@ def train(
                 },
                 checkpoint_path,
             )
-            print(f"[+] Checkpoint salvo em: {checkpoint_path}")
+            logger.info("Saved best checkpoint to: %s", checkpoint_path)
+
+    history_path = save_training_history(history, resolved_report_dir)
+    curves_path = plot_training_curves(history, resolved_report_dir / "training_curves.png")
+    logger.info("Saved training history JSON to: %s", history_path)
+    logger.info("Saved training curves chart to: %s", curves_path)
 
     return checkpoint_path
 
@@ -439,6 +513,7 @@ if __name__ == "__main__":
         "--device", type=str, default="auto", help="Dispositivo (auto, cpu, cuda, cuda:0)."
     )
     args = parser.parse_args()
+    configure_logging()
     train(
         epochs=args.epochs,
         device=args.device,

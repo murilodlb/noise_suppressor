@@ -108,7 +108,7 @@ class AsymmetricPerceptualMaskLoss(torch.nn.Module):
 
     def __init__(
         self,
-        recall_weight: float = 0.6,
+        recall_weight: float = 0.8,
         l1_weight: float = 0.2,
         eps: float = 1e-8,
     ) -> None:

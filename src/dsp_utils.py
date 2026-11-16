@@ -5,7 +5,13 @@ import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
 
+try:
+    from .logger import get_logger
+except ImportError:
+    from logger import get_logger
+
 MIN_SPEECH_POWER: float = 1e-6
+logger = get_logger(__name__)
 
 
 def compute_stft(
@@ -185,7 +191,7 @@ def plot_time_signals(
 
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"[+] Gráfico do domínio do tempo salvo em: {output_path}")
+    logger.info("Saved time-domain waveform chart to: %s", output_path)
 
 
 def plot_spectrograms(
@@ -251,4 +257,4 @@ def plot_spectrograms(
 
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"[+] Espectrogramas salvos em: {output_path}")
+    logger.info("Saved spectrogram comparison chart to: %s", output_path)

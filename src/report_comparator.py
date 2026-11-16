@@ -6,6 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from .logger import configure_logging, get_logger
+except ImportError:
+    from logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
+
 IDEAL_METRICS_SPEC: dict[str, dict[str, Any]] = {
     "si_sdr_mean_db": {
         "display_name": "SI-SDR (dB)",
@@ -316,7 +323,7 @@ def collect_evaluation_reports(
             with summary_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as err:
-            print(f"[!] Erro ao ler {summary_path}: {err}", file=sys.stderr)
+            logger.warning("Failed to read evaluation summary %s: %s", summary_path, err)
             continue
 
         report_dir = summary_path.parent
@@ -672,10 +679,7 @@ def compare_reports(
 
     summaries = collect_evaluation_reports(rep_path)
     if not summaries:
-        print(
-            f"[!] Nenhum relatório de avaliação (summary.json) encontrado em '{rep_path}'.",
-            file=sys.stderr,
-        )
+        logger.warning("No evaluation reports (summary.json) found in '%s'.", rep_path)
 
     records = build_comparison_records(summaries, sort_by=sort_by, descending=descending)
 
@@ -683,10 +687,10 @@ def compare_reports(
     saved_ref = export_ideal_reference_csv(output_ref_csv)
     saved_md = export_comparison_markdown(records, output_md)
 
-    print(f"[+] Comparação concluída ({len(summaries)} relatórios encontrados):")
-    print(f"  - Tabela comparativa CSV : {saved_csv}")
-    print(f"  - Referência de ideais   : {saved_ref}")
-    print(f"  - Relatório Markdown     : {saved_md}")
+    logger.info("Comparison completed (%d evaluation reports found):", len(summaries))
+    logger.info("  - Comparison CSV:       %s", saved_csv)
+    logger.info("  - Ideal Reference CSV:  %s", saved_ref)
+    logger.info("  - Comparison Markdown:  %s", saved_md)
 
     return {
         "num_reports": len(summaries),
@@ -730,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Se informado, ordena de forma crescente em vez de decrescente.",
     )
     args = parser.parse_args(argv)
+    configure_logging()
 
     compare_reports(
         reports_dir=args.reports_dir,

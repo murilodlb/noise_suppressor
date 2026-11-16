@@ -3,8 +3,12 @@ from pathlib import Path
 
 try:
     from .dataset_builder import PrecomputedNoiseSuppressionDataset
+    from .logger import configure_logging, get_logger
 except ImportError:
     from dataset_builder import PrecomputedNoiseSuppressionDataset
+    from logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 def run_preprocess(
@@ -23,7 +27,7 @@ def run_preprocess(
         samples_per_clean=samples_per_clean,
         snr_range=snr_range,
     )
-    print(f"[+] Dataset pré-computado salvo em: {metadata_path.parent}")
+    logger.info("Saved precomputed dataset to: %s", metadata_path.parent)
     return metadata_path
 
 
@@ -38,5 +42,6 @@ def main() -> Path:
 
 
 if __name__ == "__main__":
+    configure_logging()
     metadata_path = main()
-    print(f"[+] Dataset pré-computado salvo em: {metadata_path.parent}")
+    logger.info("Saved precomputed dataset to: %s", metadata_path.parent)

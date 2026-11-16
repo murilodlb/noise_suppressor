@@ -9,6 +9,9 @@ import torch
 
 from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
 from .inference import load_model
+from .logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def count_parameters(model: torch.nn.Module) -> dict[str, int]:
@@ -387,6 +390,6 @@ def run_benchmark(
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with out_p.open("w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        print(f"[+] Relatório de benchmark salvo em: {out_p}")
+        logger.info("Saved benchmark report to: %s", out_p)
 
     return results

@@ -11,7 +11,10 @@ import soxr
 import torch
 
 from .dsp_utils import compute_istft, compute_stft, preprocess_noisy_magnitude
+from .logger import get_logger
 from .model import build_model
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -126,7 +129,13 @@ def load_model(
                 ).to(device)
                 model.load_state_dict(checkpoint)
             model.eval()
+            logger.debug("Loaded model checkpoint from %s (%s)", path, dsp_config["model_name"])
             return model, dsp_config
+        logger.warning(
+            "Checkpoint not found at '%s'; initializing untrained '%s' model.",
+            path,
+            resolved_model_name,
+        )
 
     model = build_model(
         model_name=resolved_model_name,

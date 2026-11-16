@@ -34,7 +34,6 @@ set -euo pipefail
 #   MODEL=tinyunet     BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
 #   MODEL=ds_tinyunet  BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
 #   MODEL=res_tinyunet BASE_CHANNELS=16 LOSS=asym_mag_mse sbatch train.sh
-#   MODEL=res_tinyunet BASE_CHANNELS=24 LOSS=asym_mag_mse sbatch train.sh
 #
 # --- PRESET 2: Comparação de Eficiência TinyML Embarcado (ch=8) ---
 #   MODEL=tinyunet     BASE_CHANNELS=8 LOSS=asym_mag_mse sbatch train.sh
@@ -50,6 +49,10 @@ set -euo pipefail
 #
 # --- PRESET 4: Forçar Regeneração Completa do Banco de Ruídos + Dataset (.pt) ---
 #   FORCE_AUGMENT_NOISE=1 FORCE_PREPROCESS=1 SAMPLES_PER_CLEAN=3 sbatch train.sh
+#
+#   --- PARA TESTES ---
+#   MODEL=res_tinyunet BASE_CHANNELS=64 LOSS=mag_mse EPOCHS=120 WEIGHT_DECAY=5e-4 SAMPLES_PER_CLEAN=5 sbatch train.sh
+#   MODEL=res_tinyunet BASE_CHANNELS=64 LOSS=asym_mag_mse EPOCHS=120 WEIGHT_DECAY=5e-4 SAMPLES_PER_CLEAN=5 sbatch train.sh
 # ==============================================================================
 
 MODEL="${MODEL:-res_tinyunet}"

@@ -20,6 +20,7 @@ from .dsp_utils import (
     sample_noise_window,
 )
 from .inference import enhance_signal, load_audio_file, load_model
+from .logger import get_logger, plot_evaluation_bars
 from .metrics import (
     compute_attenuation_metrics,
     compute_mask_classification_metrics,
@@ -31,6 +32,7 @@ from .metrics import (
 from .train import _split_indices_by_clean_source
 
 FALLBACK_SNR_RANGE = (-5.0, 15.0)
+logger = get_logger(__name__)
 
 
 def _sample_fallback_snr(seed: int, row_index: int) -> float:
@@ -150,8 +152,11 @@ def evaluate(
         rng = random.Random(seed)
         eval_pairs = rng.sample(eval_pairs, max_samples)
 
-    print(
-        f"[i] Avaliando {len(eval_pairs)} amostras do split de validação (lc_db={lc_db:.1f} dB, threshold={threshold:.4f})..."
+    logger.info(
+        "Evaluating %d validation samples (lc_db=%.1f dB, threshold=%.4f)...",
+        len(eval_pairs),
+        lc_db,
+        threshold,
     )
 
     records: list[dict[str, Any]] = []
@@ -162,7 +167,7 @@ def evaluate(
         clean_audio = _fix_audio_length(load_audio_file(pair["clean_file"], sr=sr), target_samples)
         if is_silent_audio(clean_audio):
             skipped_silent += 1
-            print(f" [!] Pulando amostra silenciosa/corrompida ({pair['clean_file']})...")
+            logger.warning("Skipping silent/corrupted sample (%s)...", pair["clean_file"])
             continue
         noise_file = pair["noise_file"]
         if noise_file not in noise_cache:
@@ -264,7 +269,7 @@ def evaluate(
         records.append(record)
 
         if i % 10 == 0 or i == len(eval_pairs):
-            print(f" - [{i}/{len(eval_pairs)}] processados...")
+            logger.info("Processed %d/%d validation samples", i, len(eval_pairs))
 
     # Aggregating metrics
     summarize = summarize_metric_values
@@ -432,30 +437,47 @@ def evaluate(
     for b_name, b_val in sorted(buckets_summary.items()):
         md_content += f"| {b_name} | {b_val['sample_count']} | {b_val['si_sdr']['noisy']:.2f} dB | {b_val['si_sdr']['model']:.2f} dB | {b_val['pesq']['model']:.2f} | {b_val['stoi']['model']:.3f} | {b_val['mask_f1']:.3f} |\n"
 
+    # 4. Generate evaluation comparison bar chart
+    bars_path = plot_evaluation_bars(full_results, out_dir_path / "evaluation_bars.png")
+    md_content += (
+        "\n## 4. Visual Comparison Chart\n\n![Evaluation Metric Comparison](evaluation_bars.png)\n"
+    )
+
     with md_path.open("w", encoding="utf-8") as f:
         f.write(md_content)
 
-    print("\n[+] Relatórios de avaliação gerados:")
-    print(f"  - CSV detalhado: {csv_path}")
-    print(f"  - Resumo JSON:   {json_path}")
-    print(f"  - Resumo MD:     {md_path}")
+    logger.info("Evaluation reports generated:")
+    logger.info("  - Detailed CSV:      %s", csv_path)
+    logger.info("  - Summary JSON:      %s", json_path)
+    logger.info("  - Summary Markdown:  %s", md_path)
+    logger.info("  - Comparison Chart:  %s", bars_path)
 
-    # Console summary print
-    print("\n" + "=" * 65)
-    print(f"{'METRIC':<18} | {'NOISY':<10} | {'MODEL':<10} | {'ORACLE':<10} | {'Δ MODEL'}")
-    print("-" * 65)
+    # Logger summary table
+    logger.info("=" * 65)
+    logger.info(
+        "%-18s | %-10s | %-10s | %-10s | %s", "METRIC", "NOISY", "MODEL", "ORACLE", "Δ MODEL"
+    )
+    logger.info("-" * 65)
     for m in ["si_sdr", "pesq", "stoi"]:
         n_m = systems_summary["noisy"][m]["mean"]
         mod_m = systems_summary["model"][m]["mean"]
         o_m = systems_summary["oracle"][m]["mean"]
         d_m = deltas[f"delta_model_vs_noisy_{m}"]["mean"]
-        print(f"{m.upper():<18} | {n_m:<10.2f} | {mod_m:<10.2f} | {o_m:<10.2f} | {d_m:+.2f}")
-    print(
-        f"{'MASK F1':<18} | {'-':<10} | {model_mask_summary['f1']['mean']:<10.3f} | {'1.000':<10} | -"
+        logger.info("%-18s | %-10.2f | %-10.2f | %-10.2f | %+.2f", m.upper(), n_m, mod_m, o_m, d_m)
+    logger.info(
+        "%-18s | %-10s | %-10.3f | %-10s | -",
+        "MASK F1",
+        "-",
+        model_mask_summary["f1"]["mean"],
+        "1.000",
     )
-    print(
-        f"{'HIT - FA':<18} | {'-':<10} | {model_mask_summary['hit_minus_fa']['mean']:<10.3f} | {'1.000':<10} | -"
+    logger.info(
+        "%-18s | %-10s | %-10.3f | %-10s | -",
+        "HIT - FA",
+        "-",
+        model_mask_summary["hit_minus_fa"]["mean"],
+        "1.000",
     )
-    print("=" * 65)
+    logger.info("=" * 65)
 
     return full_results

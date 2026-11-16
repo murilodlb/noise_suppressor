@@ -11,8 +11,12 @@ import soxr
 
 try:
     from .dsp_utils import is_silent_audio, mix_at_snr, sample_noise_window
+    from .logger import get_logger
 except ImportError:
     from dsp_utils import is_silent_audio, mix_at_snr, sample_noise_window
+    from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _load_base_noise_file(file_path: Path, sr: int = 16000) -> np.ndarray:
@@ -218,9 +222,12 @@ def augment_noise_bank(
     target_samples = max(1, int(round(duration_seconds * sr)))
     created_files: list[Path] = []
 
-    print(
-        f"[i] Gerando {num_files} arquivos de ruído não-estacionário ({duration_seconds:.1f}s cada) "
-        f"a partir de {len(base_audios)} fontes base em {out_path}..."
+    logger.info(
+        "Generating %d non-stationary noise files (%.1fs each) from %d base sources in %s...",
+        num_files,
+        duration_seconds,
+        len(base_audios),
+        out_path,
     )
 
     for idx in range(1, num_files + 1):
@@ -243,5 +250,5 @@ def augment_noise_bank(
         sf.write(str(out_file), synthesized, sr, subtype="FLOAT")
         created_files.append(out_file)
 
-    print(f"[+] {len(created_files)} arquivos de ruído expandidos salvos em: {out_path}")
+    logger.info("Saved %d augmented noise files to: %s", len(created_files), out_path)
     return created_files

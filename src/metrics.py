@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import soxr
 
 try:
     import pesq as pesq_lib
@@ -117,10 +118,8 @@ def compute_pesq(reference: np.ndarray, estimate: np.ndarray, sr: int = 16000) -
 
     try:
         if sr != 16000:
-            import librosa
-
-            ref = librosa.resample(ref, orig_sr=sr, target_sr=16000)
-            est = librosa.resample(est, orig_sr=sr, target_sr=16000)
+            ref = np.asarray(soxr.resample(ref, sr, 16000), dtype=np.float32)
+            est = np.asarray(soxr.resample(est, sr, 16000), dtype=np.float32)
             sr = 16000
         score = pesq_lib.pesq(sr, ref, est, "wb")
         return float(score)

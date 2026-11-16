@@ -5,6 +5,7 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ try:
         preprocess_noisy_magnitude,
         sample_noise_window,
     )
+    from .logger import get_logger
 except ImportError:
     from dsp_utils import (
         compute_irm,
@@ -33,14 +35,20 @@ except ImportError:
         preprocess_noisy_magnitude,
         sample_noise_window,
     )
+    from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _print_export_progress(current: int, total: int, prefix: str = "Preprocess") -> None:
+    if not sys.stdout.isatty():
+        return
     bar_length = 30
     filled_length = int(bar_length * current // total) if total else bar_length
     bar = "█" * filled_length + "-" * (bar_length - filled_length)
     pct = (100.0 * current / total) if total else 100.0
-    print(f"\r{prefix} |{bar}| {current}/{total} ({pct:5.1f}%)", end="", flush=True)
+    end_char = "\n" if total and current >= total else ""
+    print(f"\r{prefix} |{bar}| {current}/{total} ({pct:5.1f}%)", end=end_char, flush=True)
 
 
 class NoiseSuppressionDataset(Dataset):
@@ -204,11 +212,10 @@ class NoiseSuppressionDataset(Dataset):
                     if sample_counter % 25 == 0 or sample_counter == total_samples:
                         _print_export_progress(sample_counter, total_samples, prefix="Export Noisy")
 
-        if total_samples > 0:
-            print()
         if skipped_silent > 0:
-            print(
-                f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6)."
+            logger.warning(
+                "Skipped %d silent/corrupted clean audio files (power < 1e-6).",
+                skipped_silent,
             )
 
         return metadata_path
@@ -305,10 +312,13 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
         output_path.mkdir(parents=True, exist_ok=True)
 
         total_samples = len(source_dataset.clean_files) * samples_per_clean
-        print(
-            f"[i] Pré-computando {total_samples} amostras "
-            f"({len(source_dataset.clean_files)} limpos x {samples_per_clean}, "
-            f"SNR em [{snr_range[0]:.1f}, {snr_range[1]:.1f}] dB)..."
+        logger.info(
+            "Precomputing %d samples (%d clean files x %d, SNR in [%.1f, %.1f] dB)...",
+            total_samples,
+            len(source_dataset.clean_files),
+            samples_per_clean,
+            snr_range[0],
+            snr_range[1],
         )
 
         # Pré-carrega os arquivos de ruído em memória uma única vez
@@ -372,11 +382,10 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
                     if sample_counter % 25 == 0 or sample_counter == total_samples:
                         _print_export_progress(sample_counter, total_samples, prefix="Preprocess")
 
-        if total_samples > 0:
-            print()
         if skipped_silent > 0:
-            print(
-                f"[i] Ignorados {skipped_silent} arquivos limpos silenciosos/corrompidos (energia < 1e-6)."
+            logger.warning(
+                "Skipped %d silent/corrupted clean audio files (power < 1e-6).",
+                skipped_silent,
             )
 
         temp_metadata_path.replace(metadata_path)
@@ -386,6 +395,6 @@ class PrecomputedNoiseSuppressionDataset(Dataset):
         for stale_file in stale_files:
             stale_file.unlink()
         if stale_files:
-            print(f"[i] {len(stale_files)} arquivos .pt antigos removidos de {output_path}")
+            logger.info("Removed %d stale .pt files from %s", len(stale_files), output_path)
 
         return metadata_path
